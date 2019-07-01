@@ -12,8 +12,10 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 #The following is an implementation of a simple CNN based on the architecture of LeNet-5 for the MNIST dataset
 
-params = {'training_epochs':10,
+params = {'training_epochs':50,
     'dropout_rate':0.5,
+    'L1_regularization_scale':0.01,
+    'L2_regularization_scale':0.0,
     'learning_rate':0.001,
     'batch_size':128,
     'num_classes':10} #NB that drop-out 'rate' = 1 - 'keep probability'
@@ -66,15 +68,19 @@ with tf.name_scope('Drop-Out'):
     tf.summary.scalar('Dropout_Rate', dropout_rate_placeholder)
 
 #Define weight and bias variables, and initialize values
+initializer = tf.glorot_uniform_initializer()
+regularizer_l1 = tf.contrib.layers.l1_regularizer(scale=params['L1_regularization_scale'])
+regularizer_l2 = tf.contrib.layers.l2_regularizer(scale=params['L2_regularization_scale'])
+
 #Note for example that the first convolutional weights layer has a 5x5 filter with 1 input channel, and 6 output channels
 #tf.get_variable will either get an existing variable with these parameters, or otherwise create a new one
 with tf.name_scope('Weights'):
     weights_LeNet = {
-    'conv_W1' : tf.get_variable('CW1', shape=(5, 5, 1, 6), initializer=tf.glorot_uniform_initializer()),
-    'conv_W2' : tf.get_variable('CW2', shape=(5, 5, 6, 16), initializer=tf.glorot_uniform_initializer()),
-    'dense_W1' : tf.get_variable('DW1', shape=(400, 120), initializer=tf.glorot_uniform_initializer()),
-    'dense_W2' : tf.get_variable('DW2', shape=(120, 84), initializer=tf.glorot_uniform_initializer()),
-    'output_W' : tf.get_variable('OW', shape=(84, params['num_classes']), initializer=tf.glorot_uniform_initializer())
+    'conv_W1' : tf.get_variable('CW1', shape=(5, 5, 1, 6), initializer=initializer, regularizer=regularizer_l1),
+    'conv_W2' : tf.get_variable('CW2', shape=(5, 5, 6, 16), initializer=initializer, regularizer=regularizer_l1),
+    'dense_W1' : tf.get_variable('DW1', shape=(400, 120), initializer=initializer, regularizer=regularizer_l2),
+    'dense_W2' : tf.get_variable('DW2', shape=(120, 84), initializer=initializer, regularizer=regularizer_l2),
+    'output_W' : tf.get_variable('OW', shape=(84, params['num_classes']), initializer=initializer, regularizer=regularizer_l2)
     }
 
     #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
@@ -83,11 +89,11 @@ with tf.name_scope('Weights'):
 
 with tf.name_scope('Biases'):
     biases_LeNet = {
-    'conv_b1' : tf.get_variable('Cb1', shape=(6), initializer=tf.glorot_uniform_initializer()),
-    'conv_b2' : tf.get_variable('Cb2', shape=(16), initializer=tf.glorot_uniform_initializer()),
-    'dense_b1' : tf.get_variable('Db1', shape=(120), initializer=tf.glorot_uniform_initializer()),
-    'dense_b2' : tf.get_variable('Db2', shape=(84), initializer=tf.glorot_uniform_initializer()),
-    'output_b' : tf.get_variable('Ob', shape=(params['num_classes']), initializer=tf.glorot_uniform_initializer())
+    'conv_b1' : tf.get_variable('Cb1', shape=(6), initializer=initializer, regularizer=regularizer_l1),
+    'conv_b2' : tf.get_variable('Cb2', shape=(16), initializer=initializer, regularizer=regularizer_l1),
+    'dense_b1' : tf.get_variable('Db1', shape=(120), initializer=initializer, regularizer=regularizer_l2),
+    'dense_b2' : tf.get_variable('Db2', shape=(84), initializer=initializer, regularizer=regularizer_l2),
+    'output_b' : tf.get_variable('Ob', shape=(params['num_classes']), initializer=initializer, regularizer=regularizer_l2)
     }
 
     for biases_var in biases_LeNet.values():
@@ -142,7 +148,7 @@ def LeNet5_train(params, var_list, training_data, training_labels, testing_data,
     predictions = cnn_predictions(x, dropout_rate_placeholder) #NB that x was defined earlier with tf.placeholder
 
     #Define the main Tensors (left hand) and Operations (right hand) that will be used during training
-    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=predictions, labels=y))
+    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=predictions, labels=y)) + tf.losses.get_regularization_loss()
     tf.summary.scalar('Softmax_cross_entropy', cost)
 
     correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y, 1))
@@ -173,8 +179,8 @@ def LeNet5_train(params, var_list, training_data, training_labels, testing_data,
         #Initialize variables; note the requirement for explicit initialization prevents expensive
         #initializers from being re-run when e.g. relaoding a model from a checkpoint
         sess.run(tf.global_variables_initializer())
-        training_writer = tf.summary.FileWriter('tb_LeNet/training', sess.graph)
-        testing_writer = tf.summary.FileWriter('tb_LeNet/testing')
+        training_writer = tf.summary.FileWriter('tb_LeNet_sparse/training', sess.graph)
+        testing_writer = tf.summary.FileWriter('tb_LeNet_sparse/testing')
 
         #Empty arrays for storing performance measures
         train_loss = []
@@ -196,16 +202,17 @@ def LeNet5_train(params, var_list, training_data, training_labels, testing_data,
 
                 loss, acc = sess.run([cost, accuracy], feed_dict = {x: batch_x, y: batch_y, dropout_rate_placeholder : 0.0})
 
+            training_summ, training_acc = sess.run([merged, accuracy], feed_dict={x: batch_x, y: batch_y, dropout_rate_placeholder : 0.0})
+            training_writer.add_summary(training_summ, epoch)
+
+            testing_summ, testing_acc = sess.run([merged, accuracy], feed_dict={x: testing_data, y: testing_labels, dropout_rate_placeholder : 0.0})
+            testing_writer.add_summary(testing_summ, epoch)
 
             print("At iteration " + str(epoch) + ", Loss = " + \
-                 "{:.6f}".format(loss) + ", Training Accuracy = " + \
-                                "{:.5f}".format(acc))
+                 "{:.4f}".format(loss) + ", Training Accuracy = " + \
+                                "{:.4f}".format(training_acc) + ", Testing Accuracy = " + \
+                                "{:.4f}".format(testing_acc))
 
-            train_acc, _ = sess.run([merged, accuracy], feed_dict={x: batch_x, y: batch_y, dropout_rate_placeholder : 0.0})
-            training_writer.add_summary(train_acc, epoch)
-
-            test_acc, _ = sess.run([merged, accuracy], feed_dict={x: testing_data, y: testing_labels, dropout_rate_placeholder : 0.0})
-            testing_writer.add_summary(test_acc, epoch)
 
         print("Training complete")
 
