@@ -5,6 +5,7 @@ import numpy as np
 from keras.datasets import mnist
 import matplotlib.pyplot as plt
 import os
+import tfCore_adversarial_attacks as atk
 
 #Temporarily disable deprecation warnings
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
@@ -12,15 +13,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 #The following is an implementation of a simple CNN based on the architecture of LeNet-5 for the MNIST dataset
 
-params = {'training_epochs':50,
-    'dropout_rate':0.5,
-    'L1_regularization_scale':0.0,
-    'L2_regularization_scale':0.0,
-    'learning_rate':0.001,
-    'batch_size':128,
-    'num_classes':10} #NB that drop-out 'rate' = 1 - 'keep probability'
-
-def data_setup(params):
+def data_setup(crossval_boolean):
     #Load the full MNIST dataset
     #Note the shape of the images required by the custom CNNs is 2D, rather than flattened as for the Madry model
     (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
@@ -33,12 +26,21 @@ def data_setup(params):
     testing_data = testing_data/255
     testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
 
-
     #Transform the labels into one-hot encoding
-    training_labels = np.eye(params['num_classes'])[training_labels.astype(int)]
-    testing_labels = np.eye(params['num_classes'])[testing_labels.astype(int)]
+    training_labels = np.eye(10)[training_labels.astype(int)]
+    testing_labels = np.eye(10)[testing_labels.astype(int)]
 
-    return (training_data, training_labels, testing_data, testing_labels)
+    if crossval_boolean == 1:
+        crossval_data = training_data[-10000:]
+        crossval_labels = training_labels[-10000:]
+        training_data = training_data[0:-10000]
+        training_labels = training_labels[0:-10000]
+
+    else:
+        crossval_data = None
+        crossval_labels = None
+
+    return (training_data, training_labels, testing_data, testing_labels, crossval_data, crossval_labels)
 
 #Define a summary variables function for later visualisation of the network
 def var_summaries(variable):
@@ -54,58 +56,61 @@ def var_summaries(variable):
         tf.summary.scalar('Min', tf.reduce_min(variable))
         tf.summary.histogram('Histogram', variable)
 
+def initilaizer_fun(params, training_data, training_labels):
 
-(training_data, training_labels, testing_data, testing_labels) = data_setup(params)
+    tf.reset_default_graph() #Re-set the default graph to clear previous e.g. variable assignments
 
-# Declare placeholders for the input features and labels
-# The first dimension of the palceholder shape is set to None as this will later be defined by the batch size
-with tf.name_scope('Input'):
-    x = tf.placeholder(training_data.dtype, [None, 28, 28, 1], name='x-input')
-    y = tf.placeholder(training_labels.dtype, [None, params['num_classes']], name='y-input')
+    # Declare placeholders for the input features and labels
+    # The first dimension of the palceholder shape is set to None as this will later be defined by the batch size
+    with tf.name_scope('Input'):
+        x = tf.placeholder(training_data.dtype, [None, 28, 28, 1], name='x-input')
+        y = tf.placeholder(training_labels.dtype, [None, 10], name='y-input')
 
-with tf.name_scope('Drop-Out'):
-    dropout_rate_placeholder = tf.placeholder(tf.float32)
-    tf.summary.scalar('Dropout_Rate', dropout_rate_placeholder)
+    with tf.name_scope('Drop-Out'):
+        dropout_rate_placeholder = tf.placeholder(tf.float32)
+        tf.summary.scalar('Dropout_Rate', dropout_rate_placeholder)
 
-#Define weight and bias variables, and initialize values
-initializer = tf.glorot_uniform_initializer()
-regularizer_l1 = tf.contrib.layers.l1_regularizer(scale=params['L1_regularization_scale'])
-regularizer_l2 = tf.contrib.layers.l2_regularizer(scale=params['L2_regularization_scale'])
+    #Define weight and bias variables, and initialize values
+    initializer = tf.glorot_uniform_initializer()
+    regularizer_l1 = tf.contrib.layers.l1_regularizer(scale=params['L1_regularization_scale'])
+    regularizer_l2 = tf.contrib.layers.l2_regularizer(scale=params['L2_regularization_scale'])
 
-#Note for example that the first convolutional weights layer has a 5x5 filter with 1 input channel, and 6 output channels
-#tf.get_variable will either get an existing variable with these parameters, or otherwise create a new one
-with tf.name_scope('Weights'):
-    weights_LeNet = {
-    'conv_W1' : tf.get_variable('CW1', shape=(5, 5, 1, 6), initializer=initializer, regularizer=regularizer_l1),
-    'conv_W2' : tf.get_variable('CW2', shape=(5, 5, 6, 16), initializer=initializer, regularizer=regularizer_l1),
-    'dense_W1' : tf.get_variable('DW1', shape=(400, 120), initializer=initializer, regularizer=regularizer_l2),
-    'dense_W2' : tf.get_variable('DW2', shape=(120, 84), initializer=initializer, regularizer=regularizer_l2),
-    'output_W' : tf.get_variable('OW', shape=(84, params['num_classes']), initializer=initializer, regularizer=regularizer_l2)
-    }
+    #Note for example that the first convolutional weights layer has a 5x5 filter with 1 input channel, and 6 output channels
+    #tf.get_variable will either get an existing variable with these parameters, or otherwise create a new one
+    with tf.name_scope('Weights'):
+        weights_LeNet = {
+        'conv_W1' : tf.get_variable('CW1', shape=(5, 5, 1, 6), initializer=initializer, regularizer=regularizer_l1),
+        'conv_W2' : tf.get_variable('CW2', shape=(5, 5, 6, 16), initializer=initializer, regularizer=regularizer_l1),
+        'dense_W1' : tf.get_variable('DW1', shape=(400, 120), initializer=initializer, regularizer=regularizer_l2),
+        'dense_W2' : tf.get_variable('DW2', shape=(120, 84), initializer=initializer, regularizer=regularizer_l2),
+        'output_W' : tf.get_variable('OW', shape=(84, 10), initializer=initializer, regularizer=regularizer_l2)
+        }
 
-    #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
-    for weights_var in weights_LeNet.values():
-        var_summaries(weights_var)
+        #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
+        for weights_var in weights_LeNet.values():
+            var_summaries(weights_var)
 
-with tf.name_scope('Biases'):
-    biases_LeNet = {
-    'conv_b1' : tf.get_variable('Cb1', shape=(6), initializer=initializer, regularizer=regularizer_l1),
-    'conv_b2' : tf.get_variable('Cb2', shape=(16), initializer=initializer, regularizer=regularizer_l1),
-    'dense_b1' : tf.get_variable('Db1', shape=(120), initializer=initializer, regularizer=regularizer_l2),
-    'dense_b2' : tf.get_variable('Db2', shape=(84), initializer=initializer, regularizer=regularizer_l2),
-    'output_b' : tf.get_variable('Ob', shape=(params['num_classes']), initializer=initializer, regularizer=regularizer_l2)
-    }
+    with tf.name_scope('Biases'):
+        biases_LeNet = {
+        'conv_b1' : tf.get_variable('Cb1', shape=(6), initializer=initializer, regularizer=regularizer_l1),
+        'conv_b2' : tf.get_variable('Cb2', shape=(16), initializer=initializer, regularizer=regularizer_l1),
+        'dense_b1' : tf.get_variable('Db1', shape=(120), initializer=initializer, regularizer=regularizer_l2),
+        'dense_b2' : tf.get_variable('Db2', shape=(84), initializer=initializer, regularizer=regularizer_l2),
+        'output_b' : tf.get_variable('Ob', shape=(10), initializer=initializer, regularizer=regularizer_l2)
+        }
 
-    for biases_var in biases_LeNet.values():
-        var_summaries(biases_var)
+        for biases_var in biases_LeNet.values():
+            var_summaries(biases_var)
 
-var_list_LeNet = [weights_LeNet['conv_W1'], weights_LeNet['conv_W2'], weights_LeNet['dense_W1'], weights_LeNet['dense_W2'], 
-weights_LeNet['output_W'], biases_LeNet['conv_b1'], biases_LeNet['conv_b2'], biases_LeNet['dense_b1'], 
-biases_LeNet['dense_b2'], biases_LeNet['output_b']]
+    var_list_LeNet = [weights_LeNet['conv_W1'], weights_LeNet['conv_W2'], weights_LeNet['dense_W1'], weights_LeNet['dense_W2'], 
+    weights_LeNet['output_W'], biases_LeNet['conv_b1'], biases_LeNet['conv_b2'], biases_LeNet['dense_b1'], 
+    biases_LeNet['dense_b2'], biases_LeNet['output_b']]
+
+    return x, y, dropout_rate_placeholder, var_list_LeNet, weights_LeNet, biases_LeNet
 
 
 #Define the model
-def cnn_predictions(features, dropout_rate_placeholder):
+def cnn_predictions(features, dropout_rate_placeholder, weights_LeNet, biases_LeNet):
     conv1 = tf.nn.conv2d(input=tf.dtypes.cast(features, dtype=tf.float32), filter=weights_LeNet['conv_W1'],
                          strides=[1, 1, 1, 1], padding="SAME")
     conv1 = tf.nn.bias_add(conv1, biases_LeNet['conv_b1'])
@@ -143,15 +148,15 @@ def cnn_predictions(features, dropout_rate_placeholder):
     return logits
 
 #Primary training function
-def LeNet5_train(params, var_list, training_data, training_labels, testing_data, testing_labels):
+def LeNet5_train(params, var_list, training_data, training_labels, testing_data, testing_labels, weights_LeNet, biases_LeNet, x_placeholder, y_placeholder, dropout_rate_placeholder):
 
-    predictions = cnn_predictions(x, dropout_rate_placeholder) #NB that x was defined earlier with tf.placeholder
+    predictions = cnn_predictions(x_placeholder, dropout_rate_placeholder, weights_LeNet, biases_LeNet) #NB that x was defined earlier with tf.placeholder
 
     #Define the main Tensors (left hand) and Operations (right hand) that will be used during training
-    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=predictions, labels=y)) + tf.losses.get_regularization_loss()
+    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=predictions, labels=y_placeholder)) + tf.losses.get_regularization_loss()
     tf.summary.scalar('Softmax_cross_entropy', cost)
 
-    correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y, 1))
+    correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
     tf.summary.scalar('Accuracy', accuracy)
 
@@ -176,11 +181,14 @@ def LeNet5_train(params, var_list, training_data, training_labels, testing_data,
         #It also caches information about the tf.Graph to enable efficient re-use of data
         #As tf.Session owns physical resources (such as the GPU), 'with' is particularly important
     with tf.Session() as sess:
+
         #Initialize variables; note the requirement for explicit initialization prevents expensive
         #initializers from being re-run when e.g. relaoding a model from a checkpoint
         sess.run(tf.global_variables_initializer())
-        training_writer = tf.summary.FileWriter('tb_LeNet/training', sess.graph)
-        testing_writer = tf.summary.FileWriter('tb_LeNet/testing')
+        network_name_str = ('LeNet_L1-' + str(params['L1_regularization_scale']) + '_L2-' + str(params['L2_regularization_scale']) + '_drop-' + str(params['dropout_rate']))
+        print("Training " + network_name_str)
+        training_writer = tf.summary.FileWriter('tensorboard_data/tb_' + network_name_str + '/training', sess.graph)
+        testing_writer = tf.summary.FileWriter('tensorboard_data/tb_' + network_name_str + '/testing')
 
         for epoch in range(params['training_epochs']):
 
@@ -191,14 +199,14 @@ def LeNet5_train(params, var_list, training_data, training_labels, testing_data,
 
                 #Recall that tf.Session.run is the main method for running a tf.Operation or evaluation a tf.Tensor
                 #By passing or more Tensors or Operations, TensorFlow will execute the operations needed
-                run_optim = sess.run(optimizer, feed_dict = {x: batch_x, y: batch_y, dropout_rate_placeholder : params['dropout_rate']})
+                run_optim = sess.run(optimizer, feed_dict = {x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : params['dropout_rate']})
 
-                loss, acc = sess.run([cost, accuracy], feed_dict = {x: batch_x, y: batch_y, dropout_rate_placeholder : 0.0})
+                loss, acc = sess.run([cost, accuracy], feed_dict = {x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : 0.0})
 
-            training_summ, training_acc = sess.run([merged, accuracy], feed_dict={x: batch_x, y: batch_y, dropout_rate_placeholder : 0.0})
+            training_summ, training_acc = sess.run([merged, accuracy], feed_dict={x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : 0.0})
             training_writer.add_summary(training_summ, epoch)
 
-            testing_summ, testing_acc = sess.run([merged, accuracy], feed_dict={x: testing_data, y: testing_labels, dropout_rate_placeholder : 0.0})
+            testing_summ, testing_acc = sess.run([merged, accuracy], feed_dict={x_placeholder: testing_data, y_placeholder: testing_labels, dropout_rate_placeholder : 0.0})
             testing_writer.add_summary(testing_summ, epoch)
 
             print("At iteration " + str(epoch) + ", Loss = " + \
@@ -209,14 +217,47 @@ def LeNet5_train(params, var_list, training_data, training_labels, testing_data,
 
         print("Training complete")
 
-        save_path = saver.save(sess, "/MNIST_LeNet5_CNN.ckpt")
-        print("Model saved in MNIST_LeNet5_CNN.ckpt")
+        save_path = saver.save(sess, "network_weights_data/" + network_name_str + ".ckpt")
 
-        test_acc, _ = sess.run([accuracy,cost], feed_dict={x: testing_data, y: testing_labels, dropout_rate_placeholder : 0.0})
-
-        print("Final testing Accuracy:","{:.5f}".format(test_acc))
+        print("Final testing Accuracy:","{:.5f}".format(testing_acc))
 
         training_writer.close()
         testing_writer.close()
 
-LeNet5_train(params, var_list_LeNet, training_data, training_labels, testing_data, testing_labels)
+        return training_acc , testing_acc, network_name_str
+
+#Runs if using the .py file in isolation, to test e.g. a particular network setup
+if __name__ == '__main__':
+
+    params = {'training_epochs':1,
+    'dropout_rate':0.5,
+    'L1_regularization_scale':0.0,
+    'L2_regularization_scale':0.0,
+    'learning_rate':0.001,
+    'batch_size':128} #NB that drop-out 'rate' = 1 - 'keep probability'
+
+    (training_data, training_labels, testing_data, testing_labels, _, _) = data_setup(crossval_boolean=0)
+
+    x, y, dropout_rate_placeholder, var_list_LeNet, weights_LeNet, biases_LeNet = initilaizer_fun(params, training_data, training_labels)
+
+    LeNet5_train(params, var_list_LeNet, training_data, training_labels, testing_data, testing_labels, weights_LeNet, biases_LeNet, x_placeholder=x, y_placeholder=y, dropout_rate_placeholder=dropout_rate_placeholder)
+
+#test_image_iter = 52
+# test_attack = atk.BIM_L2_attack(model_prediction_function=cnn_predictions,
+#                         model_weights="/MNIST_LeNet5_CNN.ckpt",
+#                         var_list=var_list_LeNet,
+#                         input_data=testing_data[test_image_iter, :, :],
+#                         input_label=np.argmax(testing_labels[test_image_iter,:]),
+#                         input_placeholder=x)
+
+# test_attack.execute_attack()
+
+
+# test_evaluation = atk.parent_attack(model_prediction_function=cnn_predictions,
+#                         model_weights="/MNIST_LeNet5_CNN.ckpt",
+#                         var_list=var_list_LeNet,
+#                         input_data=testing_data,
+#                         input_label=testing_labels,
+#                         input_placeholder=x)
+
+# test_evaluation.evaluate_resistance()
