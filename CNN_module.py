@@ -77,25 +77,23 @@ def initializer_fun(params, training_data, training_labels):
     regularizer_l1 = tf.contrib.layers.l1_regularizer(scale=params['L1_regularization_scale'])
     regularizer_l2 = tf.contrib.layers.l2_regularizer(scale=params['L2_regularization_scale'])
 
-    if params['architecture'] == 'LeNet':
-        dense_dimension = 400
-    elif params['architecture'] == 'BindingCNN':
-        dense_dimension = 400+1600+1176
-    elif params['architecture'] == 'BindingCNN_unpool':
-        dense_dimension = 400+1600
-
     #Note for example that the first convolutional weights layer has a 5x5 filter with 1 input channel, and 6 output channels
     #tf.get_variable will either get an existing variable with these parameters, or otherwise create a new one
     with tf.name_scope('Weights'):
         weights = {
         'conv_W1' : tf.get_variable('CW1', shape=(5, 5, 1, 6), initializer=initializer, regularizer=regularizer_l1),
         'conv_W2' : tf.get_variable('CW2', shape=(5, 5, 6, 16), initializer=initializer, regularizer=regularizer_l1),
-        'dense_W1' : tf.get_variable('DW1', shape=(dense_dimension, 120), initializer=initializer, regularizer=regularizer_l2),
+        'dense_W1' : tf.get_variable('DW1', shape=(400, 120), initializer=initializer, regularizer=regularizer_l2),
         'dense_W2' : tf.get_variable('DW2', shape=(120, 84), initializer=initializer, regularizer=regularizer_l2),
         'output_W' : tf.get_variable('OW', shape=(84, 10), initializer=initializer, regularizer=regularizer_l2)
         }
+        if params['architecture'] == 'BindingCNN':
+            weights['course_bindingW1'] = tf.get_variable('courseW1', shape=(1600, 120), initializer=initializer, regularizer=regularizer_l2)
+            weights['finegrained_bindingW1'] = tf.get_variable('fineW1', shape=(1176, 120), initializer=initializer, regularizer=regularizer_l2)
+        elif params['architecture'] == 'BindingCNN_unpool':
+            weights['course_bindingW1'] = tf.get_variable('courseW1', shape=(1600, 120), initializer=initializer, regularizer=regularizer_l2)
 
-        #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
+        #Add summaries for each weightseight variable in the dictionary, for later use in TensorBoard
         for weights_var in weights.values():
             var_summaries(weights_var)
 
@@ -108,12 +106,26 @@ def initializer_fun(params, training_data, training_labels):
         'output_b' : tf.get_variable('Ob', shape=(10), initializer=initializer, regularizer=regularizer_l2)
         }
 
+        #Biases do not distinguish between different inputs, so the binding layers share the bias with the standard dense-layer
+        # if params['architecture'] == 'BindingCNN':
+        #     biases['course_binding_b1'] = tf.get_variable('courseB1', shape=(120), initializer=initializer, regularizer=regularizer_l2)
+        #     biases['finegrained_binding_b1'] = tf.get_variable('fineB1', shape=(120), initializer=initializer, regularizer=regularizer_l2)
+        # elif params['architecture'] == 'BindingCNN_unpool':
+        #     biases['course_binding_b1'] = tf.get_variable('courseB1', shape=(120), initializer=initializer, regularizer=regularizer_l2)
+
+
         for biases_var in biases.values():
             var_summaries(biases_var)
 
     var_list = [weights['conv_W1'], weights['conv_W2'], weights['dense_W1'], weights['dense_W2'], 
     weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['dense_b1'], 
     biases['dense_b2'], biases['output_b']]
+
+    if params['architecture'] == 'BindingCNN':
+            var_list.append(weights['course_bindingW1'])
+            var_list.append(weights['finegrained_bindingW1'])
+    elif params['architecture'] == 'BindingCNN_unpool':
+            var_list.append(weights['course_bindingW1'])
 
     return x, y, dropout_rate_placeholder, var_list, weights, biases
 
@@ -209,10 +221,17 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases):
     tf.summary.scalar('Early_binding_sparsness', early_binding_activations_sparsity)
     tf.summary.histogram('Early_binding_activations', early_binding_activations_flat)
 
-    #Continue standard feed-forward calculations, but with binding information projected upwards (concatinated)
-    dense1 = tf.add(tf.matmul(tf.concat([invariant_pool2_drop_flat, invariant_binding_activations_flat, 
-                                         early_binding_activations_flat], axis=1), 
-                              weights['dense_W1']), biases['dense_b1'])
+    #Continue standard feed-forward calculations, but with binding information projected upwards
+    dense1 = tf.add(tf.add(tf.add(tf.matmul(invariant_pool2_drop_flat, weights['dense_W1']), biases['dense_b1']),
+        tf.add(tf.matmul(invariant_binding_activations_flat, weights['course_bindingW1']), biases['dense_b1'])),
+        tf.add(tf.matmul(early_binding_activations_flat, weights['finegrained_bindingW1']), biases['dense_b1']))
+
+    # Old version where weights not seperated for tensorboard visualization
+    # dense1 = tf.add(tf.matmul(tf.concat([invariant_pool2_drop_flat, invariant_binding_activations_flat, 
+    #                                      early_binding_activations_flat], axis=1), 
+    #                           weights['dense_W1']), biases['dense_b1'])
+
+
     dense1_drop = tf.nn.dropout(dense1, rate=dropout_rate_placeholder)
     dense1_relu = tf.nn.relu(dense1_drop)
     tf.summary.histogram('Dense1_activations', dense1_relu)
@@ -256,9 +275,13 @@ def BindingCNN_unpool_predictions(features, dropout_rate_placeholder, weights, b
     tf.summary.scalar('Invariant_binding_sparsness', invariant_binding_activations_sparsity)
     tf.summary.histogram('Invariant_binding_activations', invariant_binding_activations_flat)
 
-    #Continue standard feed-forward calculations, but with binding information projected upwards (concatinated)
-    dense1 = tf.add(tf.matmul(tf.concat([invariant_pool2_drop_flat, invariant_binding_activations_flat], axis=1), 
-                              weights['dense_W1']), biases['dense_b1'])
+    #Continue standard feed-forward calculations, but with binding information projected upwards
+    dense1 = tf.add(tf.add(tf.matmul(invariant_pool2_drop_flat, weights['dense_W1']), biases['dense_b1']),
+        tf.add(tf.matmul(invariant_binding_activations_flat, weights['course_bindingW1']), biases['dense_b1']))
+
+    # Old version where weights not seperated for tensorboard visualization
+    #dense1 = tf.add(tf.matmul(tf.concat([invariant_pool2_drop_flat, invariant_binding_activations_flat], axis=1), weights['dense_W1']), biases['dense_b1'])
+    
     dense1_drop = tf.nn.dropout(dense1, rate=dropout_rate_placeholder)
     dense1_relu = tf.nn.relu(dense1_drop)
     tf.summary.histogram('Dense1_activations', dense1_relu)
@@ -331,7 +354,7 @@ def max_unpool(pool, ind, prev_tensor, scope='unpool_2d'):
         return ret
 
 #Primary training function
-def network_train(params, var_list, training_data, training_labels, testing_data, testing_labels, weights, biases, x_placeholder, y_placeholder, dropout_rate_placeholder):
+def network_train(params, iter_num, var_list, training_data, training_labels, testing_data, testing_labels, weights, biases, x_placeholder, y_placeholder, dropout_rate_placeholder):
 
     if params['architecture'] == 'LeNet':
         predictions = LeNet_predictions(x_placeholder, dropout_rate_placeholder, weights, biases) #NB that x was defined earlier with tf.placeholder
@@ -374,7 +397,7 @@ def network_train(params, var_list, training_data, training_labels, testing_data
         #Initialize variables; note the requirement for explicit initialization prevents expensive
         #initializers from being re-run when e.g. relaoding a model from a checkpoint
         sess.run(tf.global_variables_initializer())
-        network_name_str = (params['architecture'] + '_L1-' + str(params['L1_regularization_scale']) + '_L2-' + str(params['L2_regularization_scale']) + '_drop-' + str(params['dropout_rate']))
+        network_name_str = (str(iter_num) + params['architecture'] + '_L1-' + str(params['L1_regularization_scale']) + '_L2-' + str(params['L2_regularization_scale']) + '_drop-' + str(params['dropout_rate']))
         print("Training " + network_name_str)
         training_writer = tf.summary.FileWriter('tensorboard_data/tb_' + network_name_str + '/training', sess.graph)
         testing_writer = tf.summary.FileWriter('tensorboard_data/tb_' + network_name_str + '/testing')
@@ -429,6 +452,6 @@ if __name__ == '__main__':
     (training_data, training_labels, testing_data, testing_labels, _, _) = data_setup(crossval_boolean=0)
 
     x, y, dropout_rate_placeholder, var_list, weights, biases = initializer_fun(params, training_data, training_labels)
-
-    network_train(params, var_list, training_data, training_labels, testing_data, testing_labels, weights, biases, x_placeholder=x, y_placeholder=y, dropout_rate_placeholder=dropout_rate_placeholder)
+    iter_num = 0
+    network_train(params, iter_num, var_list, training_data, training_labels, testing_data, testing_labels, weights, biases, x_placeholder=x, y_placeholder=y, dropout_rate_placeholder=dropout_rate_placeholder)
 
