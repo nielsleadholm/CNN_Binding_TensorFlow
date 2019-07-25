@@ -62,7 +62,10 @@ class parent_attack:
                     #Arrays for storing results of the evaluation
                     adversary_found = np.zeros([self.num_attack_examples]) #array of booleans that indicates if an adversary was found for a particular image
                     adversary_distance = np.zeros([self.num_attack_examples])
+                    #print("Input data shape is " + str(np.shape(self.input_data)))
                     adversary_arrays = np.zeros([self.num_attack_examples, self.input_data.shape[1], self.input_data.shape[2], 1])
+                    #print("Storage shape is " + str(np.shape(adversary_arrays)))
+                    perturb_list = []
 
                     for ii in range(self.num_attack_examples):
 
@@ -70,45 +73,68 @@ class parent_attack:
                             execution_label = np.argmax(self.input_labels[ii,:])
 
                             #Check the predicted label of the network prior to carrying out the attack isn't already incorrect
-                            pre_label = np.argmax(fmodel.predictions(execution_data[:, :, :]))
+                            # print(np.shape(execution_data))
+                            #execution_data[None, :, :, :] = execution_data
+                            execution_data_reshape = np.expand_dims(execution_data, axis=0)
+                            # print(np.shape(execution_data_reshape))
+                            pre_label = np.argmax(fmodel.forward(execution_data_reshape))
+                            #pre_label = np.argmax(fmodel.predictions(execution_data[:, :, :]))
                             if (pre_label != execution_label):
                                 print("The model predicted a " + str(pre_label) + " when the ground-truth label is " + str(execution_label))
 
                             #Carry out the attack
+                            print("Beginning attack, ground truth label is " + str(execution_label))
                             self.attack_fmodel = self.attack_method(model=fmodel, criterion=self.criterion, distance=self.foolbox_distance_metric)
                             adversarial_image_fmodel = self.create_adversarial(execution_data, execution_label)
                             
                             #Check the output of the adversarial attack
 
+                            # print("*type* Executation datatype is " + str(execution_data.dtype))
+                            # print("Adversarial datatype is " + str(adversarial_image_fmodel.dtype))
+
+                            adversarial_image_fmodel_reshape = np.expand_dims(adversarial_image_fmodel, axis=0)
+                            adver_pred = fmodel.forward(adversarial_image_fmodel_reshape)
+
+
                             if np.any(adversarial_image_fmodel == None):
-                                print("\n\n *** No adversarial image found *** \n\n")
-                            elif np.argmax(fmodel.predictions(adversarial_image_fmodel[:, :, :])) == execution_label:
-                                print("\n\n *** No adversarial image found *** \n\n")
+                                print("\n\n *** No adversarial image found - attack returned None *** \n\n")
+
+
+                            #If the image is still correctly classified, iteratively perturb it by increasing the adversarial mask until the image is misclassified
+                            elif np.argmax(adver_pred) == execution_label:
+                                print("\n *** The model correctly predicted " + str(np.argmax(adver_pred)) + " with a ground truth of " + str(execution_label))
+                                print("Iteratively enhancing perturbation until misclassified again...")
+                                multiplier = 1.001 #Initialize the multiplier
+                                #Evaluate with the initial perturbation
+                                adversarial_image_perturbed = execution_data_reshape + multiplier*(adversarial_image_fmodel_reshape - execution_data_reshape)
+                                adver_pred_perturbed = fmodel.forward(adversarial_image_perturbed)
+
+                                while np.argmax(adver_pred_perturbed) == execution_label:
+                                    multiplier += 0.001
+                                    adversarial_image_perturbed = execution_data_reshape + multiplier*(adversarial_image_fmodel_reshape - execution_data_reshape) #Check for 'correct' classification due to numerical issues
+                                    adver_pred_perturbed = fmodel.forward(adversarial_image_perturbed)
+
+                                print("Perturbed classification is " + str(np.argmax(adver_pred_perturbed)) + " following additional perturbation of " +str(multiplier))
+                                #print(np.shape(adversarial_image_fmodel))
+                                adversarial_image_fmodel = adversarial_image_perturbed[0, :, : , :] #update the adversarial image to reflect the genuinely misclassified image
+                                #print(np.shape(adversarial_image_fmodel))
+                                #perturb_list.append(multiplier)
+                                # if np.argmax(adver_pred_perturbed) != execution_label:
+                                #     print("However, after slight perturbation, classificaiton is now " + str(np.argmax(adver_pred_perturbed)))
+                                adversary_found, adversary_distance, adversary_arrays = self.store_data(adversary_found, adversary_distance, adversary_arrays,
+                                 execution_data, execution_label, adversarial_image_fmodel, ii, fmodel)
+
+                            #     # print("\n Forward pass logits are : " + str(fmodel.forward(adversarial_image_fmodel[:, :, :])))
+                            #     print("\n Predictions gave the label : " + str(np.argmax(fmodel.predictions(adversarial_image_fmodel[:, :, :]))))
+                            #     print("\n Predictions logits are : " + str(fmodel.predictions(adversarial_image_fmodel[:, :, :])))
+                            #     print("\n Original classification of " + str(execution_label))
                             else:
-                                if os.path.exists('adversarial_images/' + self.output_directory + '/' + self.attack_type_dir + '/') == 0:
-                                    try:
-                                        os.mkdir('adversarial_images/' + self.output_directory + '/')
-                                    except OSError:
-                                        pass
-                                    try:
-                                        os.mkdir('adversarial_images/' + self.output_directory + '/' + self.attack_type_dir + '/')
-                                    except OSError:
-                                        pass
+                                adversary_found, adversary_distance, adversary_arrays = self.store_data(adversary_found, adversary_distance, adversary_arrays,
+                                    execution_data, execution_label, adversarial_image_fmodel, ii, fmodel)
                                     
 
-                                plt.imsave('adversarial_images/' + self.output_directory + '/' + 
-                                    self.attack_type_dir + '/num' + str(ii) + '.png', adversarial_image_fmodel[:,:,0], cmap='gray')
-                                
-                                adversary_arrays[ii, :, :] = adversarial_image_fmodel
-
-                                print("The classification label following attack is " + str(np.argmax(fmodel.predictions(adversarial_image_fmodel[:, :, :]))) 
-                                        + " from an original classification of " + str(execution_label))
-                                distance, distance_name = self.distance_metric(execution_data.flatten(), adversarial_image_fmodel.flatten())
-                                print("The " + distance_name + " distance of the adversary is " + str(distance))
-                                adversary_found[ii] = 1
-                                adversary_distance[ii] = distance
                             
-                    return adversary_found, adversary_distance, adversary_arrays
+                    return adversary_found, adversary_distance, adversary_arrays, perturb_list
 
 
         def create_adversarial(self, execution_data, execution_label):
@@ -116,10 +142,44 @@ class parent_attack:
             adversarial_image_fmodel = self.attack_fmodel(execution_data, execution_label)
             return adversarial_image_fmodel
 
+        def store_data(self, adversary_found, adversary_distance, adversary_arrays, execution_data, execution_label, adversarial_image_fmodel, ii, fmodel):
+
+            if os.path.exists('adversarial_images/' + self.output_directory + '/' + self.attack_type_dir + '/') == 0:
+                try:
+                    os.mkdir('adversarial_images/' + self.output_directory + '/')
+                except OSError:
+                    pass
+                try:
+                    os.mkdir('adversarial_images/' + self.output_directory + '/' + self.attack_type_dir + '/')
+                except OSError:
+                    pass
+            
+            plt.imsave('adversarial_images/' + self.output_directory + '/' + 
+                self.attack_type_dir + '/num' + str(ii) + '.png', adversarial_image_fmodel[:,:,0], cmap='gray')
+
+            # print("ii is " + str(ii))
+            # print("Shape is " + str(np.shape(adversarial_image_fmodel)))
+            # print("Storage shape is " + str(np.shape(adversary_arrays)))
+            adversary_arrays[ii, :, :] = adversarial_image_fmodel
+
+            adversarial_image_fmodel_reshape = np.expand_dims(adversarial_image_fmodel, axis=0)
+            adver_pred = fmodel.forward(adversarial_image_fmodel_reshape)
+
+            print("The classification label following attack is " + str(np.argmax(adver_pred)) + " from an original classification of " + str(execution_label))
+            # print("The classification label following attack is " + str(np.argmax(fmodel.predictions(adversarial_image_fmodel[:, :, :]))) 
+            #         + " from an original classification of " + str(execution_label))
+            distance, distance_name = self.distance_metric(execution_data.flatten(), adversarial_image_fmodel.flatten())
+            print("The " + distance_name + " distance of the adversary is " + str(distance))
+            adversary_found[ii] = 1
+            adversary_distance[ii] = distance
+
+            return adversary_found, adversary_distance, adversary_arrays
+
         def distance_metric(self, vector1, vector2):
             distance = scipy.spatial.distance.euclidean(vector1, vector2)
             distance_name = 'Euclidean (L-2)'
             return distance, distance_name
+
 
 
 class blended_noise_attack(parent_attack):
