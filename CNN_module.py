@@ -7,7 +7,9 @@ import matplotlib.pyplot as plt
 import os
 import tfCore_adversarial_attacks as atk
 
-#Temporarily disable deprecation warnings
+#Impelemnts a standard LeNet-5 like CNN and 'Binding CNN' architecture in TensorFlow Core
+
+#Temporarily disable deprecation warnings (using tf 1.14)
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' 
 
@@ -16,17 +18,12 @@ def data_setup(crossval_boolean):
     #Note the shape of the images required by the custom CNNs is 2D, rather than flattened as for the Madry model
     (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
 
-    # print("*type* Training data dtype is " + str(training_data.dtype))
-    # print("Testing data dtype is " + str(testing_data.dtype))
     #Rescale images to values between 0:1 and reshape so each image is 28x28
     training_data = training_data/255
     training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
 
     testing_data = testing_data/255
     testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
-
-    # print("*type* Training data dtype is " + str(training_data.dtype))
-    # print("Testing data dtype is " + str(testing_data.dtype))
 
     #Transform the labels into one-hot encoding
     training_labels = np.eye(10)[training_labels.astype(int)]
@@ -106,14 +103,6 @@ def initializer_fun(params, training_data, training_labels):
         'output_b' : tf.get_variable('Ob', shape=(10), initializer=initializer, regularizer=regularizer_l2)
         }
 
-        #Biases do not distinguish between different inputs, so the binding layers share the bias with the standard dense-layer
-        # if params['architecture'] == 'BindingCNN':
-        #     biases['course_binding_b1'] = tf.get_variable('courseB1', shape=(120), initializer=initializer, regularizer=regularizer_l2)
-        #     biases['finegrained_binding_b1'] = tf.get_variable('fineB1', shape=(120), initializer=initializer, regularizer=regularizer_l2)
-        # elif params['architecture'] == 'BindingCNN_unpool':
-        #     biases['course_binding_b1'] = tf.get_variable('courseB1', shape=(120), initializer=initializer, regularizer=regularizer_l2)
-
-
         for biases_var in biases.values():
             var_summaries(biases_var)
 
@@ -168,8 +157,6 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases):
 
     return logits
 
-
-
 #Define the convolutional model now with binding information
 def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases):
 
@@ -183,13 +170,7 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases):
     tf.summary.histogram('Relu1_activations', relu1)
     pool1 = tf.nn.max_pool(relu1, ksize=(1,2,2,1), strides=(1,2,2,1), padding="VALID")
     pool1_drop = tf.nn.dropout(pool1, rate=dropout_rate_placeholder)
-    #Note in the tuple defining strides for max_pool, the first entry is always 1 as this refers to the batches/indexed images
-    
-    #Multiply pool1 element-wise by a tensor of 1's to simplify later gradient calculation
-    pool1_identity_w = tf.ones(tf.shape(pool1_drop))
-    pool1_drop = tf.multiply(pool1_drop, pool1_identity_w)
-    
-    #Continue standard feed-forward calculations
+
     conv2 = tf.nn.conv2d(pool1_drop, weights['conv_W2'], strides=[1,1,1,1], padding="VALID")
     conv2 = tf.nn.bias_add(conv2, biases['conv_b2'])
     conv2_drop = tf.nn.dropout(conv2, rate=dropout_rate_placeholder)
@@ -211,7 +192,7 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases):
 
     #Extract binding information for low-level neurons that are driving critical mid-level neurons
     #Specifically, the gradients provide the degree to which neurons in pool1, given the weights of conv2, contributed to the neurons that were eventually max-pooled
-    binding_grad = tf.squeeze(tf.gradients(invariant_pool2_drop, pool1_identity_w), 0) #Squeeze removes the dimension of the gradient tensor that stores dtype
+    binding_grad = tf.squeeze(tf.gradients(invariant_pool2_drop, pool1_drop), 0) #Squeeze removes the dimension of the gradient tensor that stores dtype
     #Creates a mask using all of these extracted neurons that had a non-zero influence; assuming a sufficient degree of sparsity in the activations, all of these should be 'important'
     mask = tf.dtypes.cast(tf.not_equal(binding_grad, 0), dtype=tf.float32)
     early_binding_activations = tf.multiply(pool1_drop, mask) #Apply the Boolean mask element-wise to just the pool1 activations (i.e. not including conv2 transformation)
@@ -220,16 +201,11 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases):
     early_binding_activations_sparsity = tf.math.zero_fraction(early_binding_activations_flat)
     tf.summary.scalar('Early_binding_sparsness', early_binding_activations_sparsity)
     tf.summary.histogram('Early_binding_activations', early_binding_activations_flat)
-
+    
     #Continue standard feed-forward calculations, but with binding information projected upwards
     dense1 = tf.add(tf.add(tf.add(tf.matmul(invariant_pool2_drop_flat, weights['dense_W1']), biases['dense_b1']),
         tf.add(tf.matmul(invariant_binding_activations_flat, weights['course_bindingW1']), biases['dense_b1'])),
         tf.add(tf.matmul(early_binding_activations_flat, weights['finegrained_bindingW1']), biases['dense_b1']))
-
-    # Old version where weights not seperated for tensorboard visualization
-    # dense1 = tf.add(tf.matmul(tf.concat([invariant_pool2_drop_flat, invariant_binding_activations_flat, 
-    #                                      early_binding_activations_flat], axis=1), 
-    #                           weights['dense_W1']), biases['dense_b1'])
 
 
     dense1_drop = tf.nn.dropout(dense1, rate=dropout_rate_placeholder)
@@ -244,6 +220,7 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases):
 
     return logits
 
+#Binding CNN architecture with the standard unpooling operation only (i.e. no gradient unpooling)
 def BindingCNN_unpool_predictions(features, dropout_rate_placeholder, weights, biases):
 
     conv1 = tf.nn.conv2d(input=tf.dtypes.cast(features, dtype=tf.float32), filter=weights['conv_W1'], 
@@ -279,9 +256,6 @@ def BindingCNN_unpool_predictions(features, dropout_rate_placeholder, weights, b
     dense1 = tf.add(tf.add(tf.matmul(invariant_pool2_drop_flat, weights['dense_W1']), biases['dense_b1']),
         tf.add(tf.matmul(invariant_binding_activations_flat, weights['course_bindingW1']), biases['dense_b1']))
 
-    # Old version where weights not seperated for tensorboard visualization
-    #dense1 = tf.add(tf.matmul(tf.concat([invariant_pool2_drop_flat, invariant_binding_activations_flat], axis=1), weights['dense_W1']), biases['dense_b1'])
-    
     dense1_drop = tf.nn.dropout(dense1, rate=dropout_rate_placeholder)
     dense1_relu = tf.nn.relu(dense1_drop)
     tf.summary.histogram('Dense1_activations', dense1_relu)
@@ -295,7 +269,7 @@ def BindingCNN_unpool_predictions(features, dropout_rate_placeholder, weights, b
     return logits
 
 
-#Define max_unpool function, used in the binding CNN
+#Define max_unpool function, used in the binding CNN - note credit below for this code
 def max_unpool(pool, ind, prev_tensor, scope='unpool_2d'):
     """
     Code credit of 'Twice22' from thread https://github.com/tensorflow/tensorflow/issues/2169
@@ -363,7 +337,6 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
     elif params['architecture'] == 'BindingCNN_unpool':
         predictions = BindingCNN_unpool_predictions(x_placeholder, dropout_rate_placeholder, weights, biases) #NB that x was defined earlier with tf.placeholder
     
-
     #Define the main Tensors (left hand) and Operations (right hand) that will be used during training
     cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=predictions, labels=y_placeholder)) + tf.losses.get_regularization_loss()
     tf.summary.scalar('Softmax_cross_entropy', cost)
@@ -385,13 +358,6 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
     #Merge and provide directory for saving TF summaries
     merged = tf.summary.merge_all()
 
-    #Aside on understanding 'with' and 'tf.Session()'
-        #Python's 'with' statement enables the evaluation of tf.Session, while ensuring
-        #that the associated __exit__ method (similar to e.g. closing a file) will always
-        #be executed even if an error is raised
-        #tf.Session() provides a connection between the Python program and the C++ runtime
-        #It also caches information about the tf.Graph to enable efficient re-use of data
-        #As tf.Session owns physical resources (such as the GPU), 'with' is particularly important
     with tf.Session() as sess:
 
         #Initialize variables; note the requirement for explicit initialization prevents expensive
