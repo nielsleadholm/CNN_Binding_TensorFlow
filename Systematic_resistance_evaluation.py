@@ -5,25 +5,23 @@ import numpy as np
 import os
 import json
 import tfCore_adversarial_attacks as atk
-import cleverhans.attacks as ch_atk
-from cleverhans.utils_tf import model_eval
 import matplotlib.pyplot as plt
 from PIL import Image
 import CNN_module as CNN
 
 #Parameters determining the networks that will be trained and evaluated
 model_params = {
-	'architecture':'BindingCNN',
+	'architecture':'LeNet',
 	'control_modification':None,
 	'meta_architecture':'CNN',
 	'dataset':'mnist',
-	'train_new_network':False,
+	'train_new_network':True,
 	'crossval_bool':False,
 	'num_network_duplicates':1,
     'training_epochs':30,
     'predictive_weighting':0.01,
-    'dropout_rate_min':0.25,
-    'dropout_rate_max':0.25,
+    'dropout_rate_min':0.5,
+    'dropout_rate_max':0.5,
     'dropout_parameter_step_size':0.1,
     'L1_regularization_scale_min':0.0,
     'L1_regularization_scale_max':0.0,
@@ -38,11 +36,10 @@ model_params = {
 
 #Parameters determining the adversarial attacks
 adversarial_params = {
-	'num_attack_examples':3,
-    'boundary_attack_iterations':50,
+	'num_attack_examples':5,
+    'boundary_attack_iterations':1000,
     'boundary_attack_log_steps':1000,
     'distance_range':None,
-    'BIM_attack_epsilon':0.3,
     'transfer_attack_model_for_gen':'BindingCNN',
     'transfer_attack_BaseAttack_for_gen':'Boundary'
     }
@@ -138,12 +135,6 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 						input_labels = testing_labels[lower_bound:upper_bound]
 
 
-# # ***********	***********	***********
-# #getattr(CNN, model_params['architecture'] + '_predictions')
-# #model_prediction_function=CNN.BindingCNN_control1_predictions
-# # ***********	***********	***********
-
-
 					# # Optional check for stochasticity
 					# stoch_check = atk.check_stochasticity(model_prediction_function=CNN.BindingCNN_control1_predictions,
 			  #               model_weights=("network_weights_data/" + network_name_str + ".ckpt"),
@@ -160,82 +151,22 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 					# stoch_check.perform_check()
 
 
+					#network_name_str = 'adver_trained'
 
-					#Try loading and forward prop in a cleverhans model
-					ch_model = atk.cleverhans_model(scope=model_params['architecture'], 
-					                nb_classes=10, 
-					                model_prediction_function=getattr(CNN, model_params['architecture'] + '_predictions'),
-					                model_weights=("network_weights_data/" + network_name_str + ".ckpt"),
-					                var_list=var_list,
-					                weights_dic=weights,
-					                biases_dic=biases,
-					                dropout_rate_placeholder=0.0,
-					                meta_architecture=model_params['meta_architecture'])
+					results_list = carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholder, var_list, weights, biases, network_name_str, results_list, iter_num)
+					print(results_list)
+					results_dic[network_name_str] = [float(s) for s in results_list] #convert numpy float into Python float for later json dumping
+					print(results_dic)
+					results_matrix.append(results_list)
+					print(results_matrix)
 
-					# logits = ch_model.get_logits(np.expand_dims(training_data[image_iter],axis=0))
-					# print("The true label is " + str(np.argmax(training_labels[image_iter])))
+					#Save the results matrix and dictionary on every iteration in case something goes wrong
+					save_results_matrix = np.asarray(results_matrix)
 
-					#sess=tf.Session()
-
-					fgsm = ch_atk.FastGradientMethod(ch_model)
-					fgsm_params = {'eps': 0.3,'clip_min': 0.,'clip_max': 1.}
-					adv_x = fgsm.generate(x_placeholder, **fgsm_params)
-
-
-					# BIM = ch_atk.BasicIterativeMethod(ch_model)
-					# #Note casting of placeholder type
-					# adv_x = BIM.generate(tf.dtypes.cast(x_placeholder, dtype=tf.float32))
-
-
-					# CW = ch_atk.CarliniWagnerL2(ch_model, sess=tf.Session())
-					# adv_x = CW.generate(x_placeholder)
-
-
-					# Madry_attack = ch_atk.MadryEtAl(ch_model)
-					# adv_x = Madry_attack.generate(x_placeholder)
-
-
-					preds_adv = ch_model.get_logits(adv_x)
-					
-
-					eval_params = {'batch_size': model_params['batch_size']}
-					saver = tf.train.Saver(var_list) #Define saver object for use later when loading the model weights
-
-					with tf.Session() as session:
-
-						saver.restore(session, "network_weights_data/" + network_name_str + ".ckpt")
-						acc = model_eval(session, x_placeholder, y_placeholder, preds_adv, testing_data, testing_labels, args=eval_params)
-						print('Test accuracy on adversarial examples: %0.4f\n' % acc)
-
-
-					#def do_eval(preds, x_set, y_set, report_key, is_adv=None):
-					
-					# 	setattr(report, report_key, acc)
-					# 	if is_adv is None:
-					# 	  report_text = None
-					# 	elif is_adv:
-					# 	  report_text = 'adversarial'
-					# 	else:
-					# 	  report_text = 'legitimate'
-					# 	if report_text:
-					# 	  print('Test accuracy on %s examples: %0.4f' % (report_text, acc))
-
-					# do_eval(preds_adv, testing_data, testing_labels, 'clean_train_adv_eval', is_adv=True)
-
-					# results_list = carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholder, var_list, weights, biases, network_name_str, results_list, iter_num)
-					# print(results_list)
-					# results_dic[network_name_str] = [float(s) for s in results_list] #convert numpy float into Python float for later json dumping
-					# print(results_dic)
-					# results_matrix.append(results_list)
-					# print(results_matrix)
-
-					# #Save the results matrix and dictionary on every iteration in case something goes wrong
-					# save_results_matrix = np.asarray(results_matrix)
-
-					# #Save results to file
-					# np.savetxt("Results_matrix.csv", save_results_matrix, delimiter=",")
-					# with open('Results_dic.json', 'w') as f:
-					# 	json.dump(results_dic, f, indent=4)
+					#Save results to file
+					np.savetxt("Results_matrix.csv", save_results_matrix, delimiter=",")
+					with open('Results_dic.json', 'w') as f:
+						json.dump(results_dic, f, indent=4)
 
 
 
@@ -245,62 +176,101 @@ def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholde
 	if os.path.exists('adversarial_images/') == 0:
 		os.mkdir('adversarial_images/')
 
-	# pointwise = atk.pointwise_attack(model_prediction_function=getattr(CNN, model_params['architecture'] + '_predictions'),
- #                model_weights=("network_weights_data/" + network_name_str + ".ckpt"),
- #                var_list=var_list,
- #                weights_dic=weights,
- #                biases_dic=biases,
- #                input_data=input_data,
- #                input_labels=input_labels,
- #                input_placeholder=x_placeholder,
- #                dropout_rate_placeholder=0.0,
- #                output_directory = network_name_str,
- #                num_attack_examples=adversarial_params['num_attack_examples'])
-
-	# adversary_found, adversary_distance, adversaries_array, _ = pointwise.evaluate_resistance()
-	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array)
-
-	# blended = atk.blended_noise_attack(model_prediction_function=getattr(CNN, model_params['architecture'] + '_predictions'),
- #                model_weights=("network_weights_data/" + network_name_str + ".ckpt"),
- #                var_list=var_list,
- #                weights_dic=weights,
- #                biases_dic=biases,
- #                input_data=input_data,
- #                input_labels=input_labels,
- #                input_placeholder=x_placeholder,
- #                dropout_rate_placeholder=0.0,
- #                output_directory = network_name_str,
- #                num_attack_examples=adversarial_params['num_attack_examples'])
-
-	# adversary_found, adversary_distance, adversaries_array, _ = blended.evaluate_resistance()
-	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array)
+	attack_dic = {'model_prediction_function':getattr(CNN, model_params['architecture'] + '_predictions'),
+                'model_weights':("network_weights_data/" + network_name_str + ".ckpt"),
+                'var_list':var_list,
+                'weights_dic':weights,
+                'biases_dic':biases,
+                'input_data':input_data,
+                'input_labels':input_labels,
+                'input_placeholder':x_placeholder,
+                'dropout_rate_placeholder':0.0,
+                'output_directory':network_name_str,
+                'meta_architecture':model_params['meta_architecture'],
+                'num_attack_examples':adversarial_params['num_attack_examples']}
 
 
 
+	# print("\n\n***Performing L-0 Distance Attacks***\n\n")
+
+	# pointwise_L0 = atk.pointwise_attack_L0(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = pointwise_L0.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# salt = atk.salt_pepper_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = salt.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
 
 
 
-# ***********	***********	***********
-# model_prediction_function=CNN.BindingCNN_control1_predictions
-#getattr(CNN, model_params['architecture'] + '_predictions')
-# ***********	***********	***********
-	boundary = atk.boundary_attack(model_prediction_function=CNN.BindingCNN_control1_predictions,
-                model_weights=("network_weights_data/" + network_name_str + ".ckpt"),
-                var_list=var_list,
-                weights_dic=weights,
-                biases_dic=biases,
-                input_data=input_data,
-                input_labels=input_labels,
-                input_placeholder=x_placeholder,
-                dropout_rate_placeholder=0.0,
-                output_directory=network_name_str,
-                meta_architecture=model_params['meta_architecture'],
-                num_attack_examples=adversarial_params['num_attack_examples'],
-                return_distance_image=0,
-                num_iterations=adversarial_params['boundary_attack_iterations'],
-                log_every_n_steps=adversarial_params['boundary_attack_log_steps'])
+	# print("\n\n***Performing L-Inf Distance Attacks***\n\n")
 
-	adversary_found, adversary_distance, adversaries_array, perturb_list = boundary.evaluate_resistance()
+	# FGSM = atk.FGSM_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = FGSM.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# BIM_LInf = atk.BIM_Linfinity_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = BIM_LInf.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# DeepFool_LInf = atk.DeepFool_LInf_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = DeepFool_LInf.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# MIM = atk.MIM_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = MIM.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+
+	# print("\n\n***Performing L-2 Distance Attacks***\n\n")
+
+	# # blended = atk.blended_noise_attack(attack_dic)
+	# # adversary_found, adversary_distance, adversaries_array, perturb_list = blended.evaluate_resistance()
+	# # results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# gaussian = atk.gaussian_noise_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = gaussian.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# pointwise_L2 = atk.pointwise_attack_L2(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = pointwise_L2.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# FGM = atk.FGM_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = FGM.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# BIM_L2 = atk.BIM_L2_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = BIM_L2.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# DeepFool_L2 = atk.DeepFool_L2_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = DeepFool_L2.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	# boundary = atk.boundary_attack(attack_dic,
+ #                num_iterations=adversarial_params['boundary_attack_iterations'],
+ #                log_every_n_steps=adversarial_params['boundary_attack_log_steps'])
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = boundary.evaluate_resistance()
+	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+
+	print("\n\n***Performing Additional Attacks***\n\n")
+
+	blended = atk.blended_noise_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = blended.evaluate_resistance()
+	results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	local_search = atk.local_search_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = local_search.evaluate_resistance()
+	results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	gaussian_blur = atk.gaussian_blur_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = gaussian_blur.evaluate_resistance()
+	results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
+
+	spatial = atk.spatial_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = spatial.evaluate_resistance()
 	results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
 
 
@@ -311,26 +281,7 @@ def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholde
 # 	for jj in range(15):
 # 		adversarial_params['distance_range'] = (jj, jj+1)
 
-
-
-# # ***********	***********	***********
-# #getattr(CNN, model_params['architecture'] + '_predictions')
-# #model_prediction_function=CNN.BindingCNN_control1_predictions
-# # ***********	***********	***********
-
-
-# 		transfer = atk.transfer_attack(model_prediction_function=getattr(CNN, model_params['architecture'] + '_predictions'),
-# 	                model_weights=("network_weights_data/" + network_name_str + ".ckpt"),
-# 	                var_list=var_list,
-# 	                weights_dic=weights,
-# 	                biases_dic=biases,
-# 	                input_data=input_data,
-# 	                input_labels=input_labels,
-# 	                input_placeholder=x_placeholder,
-# 	                dropout_rate_placeholder=0.0,
-# 	                output_directory = network_name_str,
-# 	                meta_architecture = model_params['meta_architecture'],
-# 	                num_attack_examples=adversarial_params['num_attack_examples'],
+# 		transfer = atk.transfer_attack(attack_dic,
 # 	                model_under_attack=model_params['architecture'],
 # 	                model_adversarial_gen=str(iter_num) + adversarial_params['transfer_attack_model_for_gen'],
 # 	                attack_type_dir=adversarial_params['transfer_attack_BaseAttack_for_gen'],
@@ -338,12 +289,8 @@ def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholde
 
 # 		adversary_found = transfer.evaluate_resistance()
 		
-
-
 # 		#Keep a cumulative score of the succcess ratio
 # 		success_ratio += np.sum(adversary_found)/adversarial_params['num_attack_examples']
-
-
 
 		
 # 		print("The success ratio is " + str(success_ratio))
@@ -351,91 +298,28 @@ def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholde
 
 
 
-# # ***********	***********	***********
-# #getattr(CNN, model_params['architecture'] + '_predictions')
-# #model_prediction_function=CNN.BindingCNN_control1_predictions
-# # ***********	***********	***********
-
-
-	# BIM2 = atk.BIM_L2_attack(model_prediction_function=CNN.BindingCNN_control1_predictions,
- #                model_weights=("network_weights_data/" + network_name_str + ".ckpt"),
- #                var_list=var_list,
- #                weights_dic=weights,
- #                biases_dic=biases,
- #                input_data=input_data,
- #                input_labels=input_labels,
- #                input_placeholder=x_placeholder,
- #                dropout_rate_placeholder=0.0,
- #                output_directory = network_name_str,
- #                meta_architecture = model_params['meta_architecture'],
- #                num_attack_examples=adversarial_params['num_attack_examples'],
- #                epsilon=adversarial_params['BIM_attack_epsilon'])
-
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = BIM2.evaluate_resistance()
-	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
-
-
-
-# # ***********	***********	***********
-# #getattr(CNN, model_params['architecture'] + '_predictions')
-# #model_prediction_function=CNN.BindingCNN_control1_predictions
-# # ***********	***********	***********
-
-	# BIMInf = atk.BIM_Linfinity_attack(model_prediction_function=getattr(CNN, model_params['architecture'] + '_predictions'),
- #                model_weights=("network_weights_data/" + network_name_str + ".ckpt"),
- #                var_list=var_list,
- #                weights_dic=weights,
- #                biases_dic=biases,
- #                input_data=input_data,
- #                input_labels=input_labels,
- #                input_placeholder=x_placeholder,
- #                dropout_rate_placeholder=0.0,
- #                output_directory = network_name_str,
- #                meta_architecture = model_params['meta_architecture'],
- #                num_attack_examples=adversarial_params['num_attack_examples'],
- #                epsilon=adversarial_params['BIM_attack_epsilon'])
-
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = BIMInf.evaluate_resistance()
-	# results_list = analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list)
-
 	return results_list
 
 def analysis(results_list, adversary_found, adversary_distance, adversaries_array, perturb_list):
 
 	success_ratio = np.sum(adversary_found)/adversarial_params['num_attack_examples']
 	mean_distance = np.sum(adversary_distance)/adversarial_params['num_attack_examples']
+	median_distance = np.median(adversary_distance)
 	std_distance = np.std(adversary_distance)
 	print("The success ratio is " + str(success_ratio))
 	print("The mean distance is " + str(mean_distance))
+	print("The median distance is " + str(median_distance))
 
 	if len(perturb_list) > 0:
 		mean_perturb = np.sum(perturb_list)/len(perturb_list)
 		print("The mean perturbation is " + str(mean_perturb))
 
 
-	results_list.append(success_ratio), results_list.append(mean_distance), results_list.append(std_distance)
+	results_list.append(success_ratio), results_list.append(median_distance), results_list.append(mean_distance), results_list.append(std_distance)
 
 	return results_list
 
 
 iterative_evaluation(model_params, adversarial_params, training_data, training_labels, crossval_data, crossval_labels)
-
-#Create numpy array to store key data values, this is then added to the Pandas data structure
-#for each model; the rows, indexed from 0, correspond to 0:training accuracy, 1:crossvalidation 
-#accuracy, 2/3/4: percentage of successful adversaries, mean distance, and standard deviaition of distance 
-#for the pointw-wise Noise attack; 5/6/7, 8/9/10, 11/12/13, and 14/15/16 then correspond to these 
-#three values for the blended-uniform, boundary, BIM2, and BIM-infinity attacks respectively
-#Columns should be named based on the model identifier
-
-# plus an additional text file with network parameters (e.g. number of epochs of training, number of attack examples), all organized in a hierarchical folder system
-
-# After many different models have been iterated through, provide summary data and visualization on how the models performed in comparison
-# e.g. a bar chart for each adversary type, and where each bar is a different model; should be possible to 
-# iterate through each Pandas data file, extract required data, and create comparison plots
-
-# Rather than trying to show every model on the bar chart, the chart can be used to get an idea for the spread (how much a particular parameter matters for performance), and then print e.g. 'the top 3 performing models'
-# Include in the rows information on the model parameter iters, so that I can use these to develop a mask, and then for any given fixed parameter value, see what influence the others have
-
-
 
 
