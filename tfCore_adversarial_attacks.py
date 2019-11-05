@@ -3,8 +3,12 @@
 import tensorflow as tf
 import numpy as np
 import os
+import copy
 import foolbox
 from cleverhans.model import Model
+from cleverhans.loss import CrossEntropy
+from cleverhans.utils import safe_zip
+from cleverhans.compat import softmax_cross_entropy_with_logits
 import scipy
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -12,19 +16,51 @@ from PIL import Image
 #Utilizes the FoolBox Python library (https://github.com/bethgelab/foolbox) to implement a variety 
 #of adversarial attacks against deep-learning models implimented in TensorFlow's Core API
 
+class custom_cleverhans_loss(CrossEntropy):
+  def fprop(self, x, y, **kwargs):
+    kwargs.update(self.kwargs)
+    if self.attack is not None:
+      attack_params = copy.copy(self.attack_params)
+      if attack_params is None:
+        attack_params = {}
+      if self.pass_y:
+        attack_params['y'] = y
+      x = x, self.attack.generate(x, **attack_params)
+      coeffs = [1. - self.adv_coeff, self.adv_coeff]
+      if self.adv_coeff == 1.:
+        x = (x[1],)
+        coeffs = (coeffs[1],)
+    else:
+      x = tuple([x])
+      coeffs = [1.]
+    assert np.allclose(sum(coeffs), 1.)
+
+    # Catching RuntimeError: Variable -= value not supported by tf.eager.
+    try:
+      y -= self.smoothing * (y - 1. / tf.cast(y.shape[-1], y.dtype))
+    except RuntimeError:
+      y.assign_sub(self.smoothing * (y - 1. / tf.cast(y.shape[-1],
+                                                      y.dtype)))
+
+    logits = [self.model.get_logits(x, **kwargs) for x in x]
+    loss = sum(
+        coeff * tf.reduce_mean(softmax_cross_entropy_with_logits(labels=y,
+                                                                 logits=logit))
+        for coeff, logit in safe_zip(coeffs, logits))
+    loss = loss + tf.losses.get_regularization_loss()
+    return loss
+
 class native_cleverhans_model(Model):
   def __init__(self, 
                 scope, 
                 nb_classes, 
                 model_prediction_function,
                 dropout_rate_placeholder,
-                meta_architecture,
                 **kwargs):
     del kwargs
     Model.__init__(self, scope, nb_classes, locals())
     self.model_prediction_function = model_prediction_function
     self.dropout_rate_placeholder = dropout_rate_placeholder
-    self.meta_architecture = meta_architecture
 
     # Do a dummy run of fprop to make sure the variables are created from
     # the start
@@ -37,26 +73,28 @@ class native_cleverhans_model(Model):
 
     with tf.variable_scope(self.scope, reuse=tf.AUTO_REUSE):
 
-        initializer = tf.glorot_uniform_initializer()
+        regularizer_l1 = tf.contrib.layers.l1_regularizer(scale=0.0)
+
+        initializer = tf.contrib.layers.variance_scaling_initializer()
         self.weights = {
-        'conv_W1' : tf.get_variable('CW1', shape=(5, 5, 1, 6), initializer=initializer),
-        'conv_W2' : tf.get_variable('CW2', shape=(5, 5, 6, 16), initializer=initializer),
-        'dense_W1' : tf.get_variable('DW1', shape=(400, 120), initializer=initializer),
-        'dense_W2' : tf.get_variable('DW2', shape=(120, 84), initializer=initializer),
-        'output_W' : tf.get_variable('OW', shape=(84, 10), initializer=initializer)
+        'conv_W1' : tf.get_variable('CW1', shape=(5, 5, 1, 6), initializer=initializer, regularizer=regularizer_l1),
+        'conv_W2' : tf.get_variable('CW2', shape=(5, 5, 6, 16), initializer=initializer, regularizer=regularizer_l1),
+        'dense_W1' : tf.get_variable('DW1', shape=(400, 512), initializer=initializer, regularizer=regularizer_l1),
+        'dense_W2' : tf.get_variable('DW2', shape=(512, 84), initializer=initializer, regularizer=regularizer_l1),
+        'output_W' : tf.get_variable('OW', shape=(84, 10), initializer=initializer, regularizer=regularizer_l1)
         }
-        self.weights['course_bindingW1'] = tf.get_variable('courseW1', shape=(1600, 120), initializer=initializer)
-        self.weights['finegrained_bindingW1'] = tf.get_variable('fineW1', shape=(1176, 120), initializer=initializer)
+        self.weights['course_bindingW1'] = tf.get_variable('courseW1', shape=(1600, 512), initializer=initializer, regularizer=regularizer_l1)
+        self.weights['finegrained_bindingW1'] = tf.get_variable('fineW1', shape=(1176, 512), initializer=initializer, regularizer=regularizer_l1)
 
         self.biases = {
-        'conv_b1' : tf.get_variable('Cb1', shape=(6), initializer=initializer),
-        'conv_b2' : tf.get_variable('Cb2', shape=(16), initializer=initializer),
-        'dense_b1' : tf.get_variable('Db1', shape=(120), initializer=initializer),
-        'dense_b2' : tf.get_variable('Db2', shape=(84), initializer=initializer),
-        'output_b' : tf.get_variable('Ob', shape=(10), initializer=initializer)
+        'conv_b1' : tf.get_variable('Cb1', shape=(6), initializer=initializer, regularizer=regularizer_l1),
+        'conv_b2' : tf.get_variable('Cb2', shape=(16), initializer=initializer, regularizer=regularizer_l1),
+        'dense_b1' : tf.get_variable('Db1', shape=(512), initializer=initializer, regularizer=regularizer_l1),
+        'dense_b2' : tf.get_variable('Db2', shape=(84), initializer=initializer, regularizer=regularizer_l1),
+        'output_b' : tf.get_variable('Ob', shape=(10), initializer=initializer, regularizer=regularizer_l1)
         }
 
-        logits, _ = self.model_prediction_function(x, self.dropout_rate_placeholder, self.weights, self.biases, self.meta_architecture)
+        logits, _ = self.model_prediction_function(x, self.dropout_rate_placeholder, self.weights, self.biases)
 
         return {self.O_LOGITS: logits,
               self.O_PROBS: tf.nn.softmax(logits=logits)}
@@ -76,7 +114,6 @@ class parent_attack:
             self.input_placeholder = attack_dic['input_placeholder']
             self.dropout_rate_placeholder = attack_dic['dropout_rate_placeholder']
             self.output_directory = attack_dic['output_directory']
-            self.meta_architecture = attack_dic['meta_architecture']
             self.num_attack_examples = attack_dic['num_attack_examples']
             self.criterion = criterion #note by default this is simply foolbox's Misclassification criterion
             self.dropout_rate = dropout_rate #also provided with default value above
@@ -88,7 +125,7 @@ class parent_attack:
 
     def evaluate_resistance(self):
 
-        logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.meta_architecture)
+        logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
 
         with tf.Session() as session:
@@ -128,13 +165,15 @@ class parent_attack:
 
                 if np.any(adversarial_image_fmodel == None):
                     print("\n\n *** No adversarial image found - attack returned None *** \n\n")
+                    #Set distance negative so that accuracy at a given thresholded can later be found
+                    adversary_distance[example_iter] = -1
 
 
                 #If the image is still correctly classified, iteratively perturb it by increasing the adversarial mask until the image is misclassified
                 elif np.argmax(fmodel.predictions(adversarial_image_fmodel_reshape)) == execution_label:
                     print("\n *** The model correctly predicted " + str(np.argmax(fmodel.predictions(adversarial_image_fmodel_reshape))) + " with a ground truth of " + str(execution_label))
                     print("Iteratively enhancing perturbation until misclassified again...")
-                    multiplier = 1.001 #Initialize the multiplier
+                    multiplier = 1.0001 #Initialize the multiplier
                     #Evaluate with the initial perturbation
                     adversarial_image_perturbed = execution_data_reshape + multiplier*(adversarial_image_fmodel_reshape - execution_data_reshape)
                     adver_pred_perturbed = fmodel.predictions(adversarial_image_perturbed)
@@ -153,7 +192,7 @@ class parent_attack:
                     adversary_found, adversary_distance, adversaries_array = self.store_data(adversary_found, adversary_distance, adversaries_array,
                         execution_data, execution_label, adversarial_image_fmodel, example_iter, fmodel)
             
-            self.store_transfer_attack_data(adversaries_array, adversary_distance)
+            # self.store_transfer_attack_data(adversaries_array, adversary_distance)
 
             return adversary_found, adversary_distance, adversaries_array, perturb_list
 
@@ -192,35 +231,45 @@ class parent_attack:
 
         return adversary_found, adversary_distance, adversaries_array
 
-    def store_transfer_attack_data(self, adversaries_array, adversary_distance):
-       #Note the save directory is slightly different for the Transfer Attack data
-        transfer_output_directory = ((self.output_directory).split('_'))[0]
+    # def store_transfer_attack_data(self, adversaries_array, adversary_distance):
+    #    #Note the save directory is slightly different for the Transfer Attack data
+    #     transfer_output_directory = ((self.output_directory).split('_'))[0]
         
-        if os.path.exists('adversarial_images/transfer_images/' + transfer_output_directory + '/' + self.attack_type_dir + '/') == 0:
-            try: 
-                os.mkdir('adversarial_images/transfer_images')
-            except OSError:
-                pass
-            try:
-                os.mkdir('adversarial_images/transfer_images/' + transfer_output_directory + '/')
-            except OSError:
-                pass
-            try:
-                os.mkdir('adversarial_images/transfer_images/' + transfer_output_directory + '/' + self.attack_type_dir + '/')
-            except OSError:
-                pass
+    #     if self.foolbox_distance_metric == foolbox.distances.MeanSquaredDistance:
+    #         distance_dir = 'L2'
+    #     elif self.foolbox_distance_metric == foolbox.distances.L0:
+    #         distance_dir = 'L0'
+    #     elif self.foolbox_distance_metric == foolbox.distances.Linfinity:
+    #         distance_dir = 'LInf'
 
-        #Save the generated adversaries and ground-truth labels for use later in transfer attacks
-        # np.savetxt('adversarial_images/transfer_images/' + transfer_output_directory + '/' + self.attack_type_dir + '/adversaries_array.csv', 
-        #     np.reshape(adversaries_array, [adversaries_array.shape[0], adversaries_array.shape[1]*adversaries_array.shape[2]]), 
-        #     delimiter=',')
-        np.savetxt('adversarial_images/transfer_images/' + transfer_output_directory + '/' + self.attack_type_dir + '/ground_truth_labels.csv', 
-            np.argmax(self.input_labels[0:self.num_attack_examples,:], axis=1),
-            delimiter=',')
-        #Save the distances of all the images generated
-        np.savetxt('adversarial_images/transfer_images/' + transfer_output_directory + '/' + self.attack_type_dir + '/adversary_distances.csv', 
-            adversary_distance, 
-            delimiter=',')
+    #     if os.path.exists('adversarial_images/transfer_images/' + transfer_output_directory + '/' + distance_dir + '/' + self.attack_type_dir + '/') == 0:
+    #         try: 
+    #             os.mkdir('adversarial_images/transfer_images')
+    #         except OSError:
+    #             pass
+    #         try:
+    #             os.mkdir('adversarial_images/transfer_images/' + transfer_output_directory + '/')
+    #         except OSError:
+    #             pass
+    #         try:
+    #             os.mkdir('adversarial_images/transfer_images/' + transfer_output_directory + '/' + distance_dir + '/')
+    #         except OSError:
+    #             pass
+    #         try:
+    #             os.mkdir('adversarial_images/transfer_images/' + transfer_output_directory + '/' + distance_dir + '/' self.attack_type_dir + '/')
+    #         except OSError:
+    #             pass
+
+    #     #Save the generated adversaries and ground-truth labels for use later in transfer attacks
+    #     np.save('adversarial_images/transfer_images/' + transfer_output_directory + '/' + distance_dir + '/' + self.attack_type_dir + '/adversaries_array.npy', 
+    #         np.reshape(adversaries_array, [adversaries_array.shape[0], adversaries_array.shape[1]*adversaries_array.shape[2]]))
+    #     np.savetxt('adversarial_images/transfer_images/' + transfer_output_directory + '/' + distance_dir + '/' + self.attack_type_dir + '/ground_truth_labels.csv', 
+    #         np.argmax(self.input_labels[0:self.num_attack_examples,:], axis=1),
+    #         delimiter=',')
+    #     #Save the distances of all the images generated
+    #     np.savetxt('adversarial_images/transfer_images/' + transfer_output_directory + '/' + distance_dir + '/' + self.attack_type_dir + '/adversary_distances.csv', 
+    #         adversary_distance, 
+    #         delimiter=',')
 
     def distance_metric(self, vector1, vector2):
         distance = scipy.spatial.distance.euclidean(vector1, vector2)
@@ -232,7 +281,7 @@ class check_stochasticity(parent_attack):
 
     def perform_check(self):
 
-            logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.meta_architecture)
+            logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
             saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
 
             with tf.Session() as session:
@@ -269,94 +318,99 @@ class check_stochasticity(parent_attack):
                     print("No stochastic elements identified")
                     
 
-class transfer_attack(parent_attack):
-    #Overwrite parent constructor for three additional attributes:
-    # model_under_attack is the model architecture that the transfer attack is being applied to
-    # model_adversarial_gen and attack_type_dir is the model and attack-type that were used to actually generate the adversarial examples
-    # distance_range determines if an upper and/or lower bound on the distance of the adversaries will be set before conducting the transfer attack;
-    # note that for this, the distance metric will have been defined when the adversary_distances array was first made
-    def __init__(self, attack_dic, 
-                    return_distance_image=0,
-                    criterion=foolbox.criteria.Misclassification(), 
-                    dropout_rate=0.0,
-                    model_under_attack=None,
-                    model_adversarial_gen=None,
-                    attack_type_dir=None,
-                    distance_range=None):
-            parent_attack.__init__(self, attack_dic, 
-                    return_distance_image,
-                    criterion, 
-                    dropout_rate)
-            self.model_under_attack = model_under_attack
-            self.model_adversarial_gen = model_adversarial_gen
-            self.attack_type_dir = attack_type_dir
-            self.distance_range = distance_range
+# class transfer_attack(parent_attack):
+#     #Overwrite parent constructor for three additional attributes:
+#     # model_under_attack is the model architecture that the transfer attack is being applied to
+#     # model_adversarial_gen and attack_type_dir is the model and attack-type that were used to actually generate the adversarial examples
+#     # distance_range determines if an upper and/or lower bound on the distance of the adversaries will be set before conducting the transfer attack;
+#     # note that for this, the distance metric will have been defined when the adversary_distances array was first made
+#     def __init__(self, attack_dic, 
+#                     return_distance_image=0,
+#                     criterion=foolbox.criteria.Misclassification(), 
+#                     dropout_rate=0.0,
+#                     model_under_attack=None,
+#                     model_adversarial_gen=None,
+#                     attack_type_dir=None,
+#                     transfer_distance_metric=None):
+#             parent_attack.__init__(self, attack_dic, 
+#                     return_distance_image,
+#                     criterion, 
+#                     dropout_rate)
+#             self.model_under_attack = model_under_attack
+#             self.model_adversarial_gen = model_adversarial_gen
+#             self.attack_type_dir = attack_type_dir
+#             self.transfer_distance_metric = transfer_distance_metric
 
 
-    def evaluate_resistance(self):
+#     def evaluate_resistance(self):
 
-        logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.meta_architecture)
-        saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
+#         logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
+#         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
 
-        with tf.Session() as session:
+#         with tf.Session() as session:
         
-            saver.restore(session, self.model_weights)
-            fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
+#             saver.restore(session, self.model_weights)
+#             fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
         
-            print("\nPerforming transfer attack with " + self.attack_type_dir + 
-                " attack examples generated on a " + self.model_adversarial_gen + " model")
-            print("Evaluating " + str(self.num_attack_examples) + " adversarial example(s)")
+#             #Iterate through all the models that are not of the kind being attacked
+#             rootdir = 'adversarial_images/transfer_images/'
+#             _, model_dirs, _ = next(os.walk(rootdir))
+#             for key in model_dirs:
+#                 if not key.endswith(self.model_under_attack):
+#                     print(key)
 
-            assert self.model_adversarial_gen != self.model_under_attack, "*** Trying to use transfer attack with the model's own adversaries ***"
-
-            #Arrays for storing results of the evaluation
-            adversary_found = []
-
-            #Note that attack_type_dir now determines the type of adversarial examples (i.e. how they were generated) that shoulbe *loaded*
-            transfer_images_file = ('adversarial_images/transfer_images/' + self.model_adversarial_gen + '/' + 
-                self.attack_type_dir + '/adversaries_array.csv')
-            ground_truth_file = ('adversarial_images/transfer_images/' + self.model_adversarial_gen + '/' + 
-                self.attack_type_dir + '/ground_truth_labels.csv')
-            distances_file = ('adversarial_images/transfer_images/' + self.model_adversarial_gen + '/' + 
-                self.attack_type_dir + '/adversary_distances.csv')
-
-            #Load transfer_attack_images and reshape
-            transfer_images = np.genfromtxt(transfer_images_file, delimiter=',')
-            transfer_images = np.reshape(transfer_images, [transfer_images.shape[0], 28, 28, 1])
-
-            ground_truth_labels = np.genfromtxt(ground_truth_file, delimiter=',')
-
-            #Filter the transfer images by the upper and lower bounds of perturbation, if set
-            satisfy_bounds = np.ones(self.num_attack_examples) #Create a default array of all true if distance range not specified
-            if self.distance_range != None:
-                print("Using a lower and upper bound on transfer attack perturbations of " + str(self.distance_range[0]) + " and " + str(self.distance_range[1]))
-                image_distances = np.genfromtxt(distances_file, delimiter=',')
-                satisfy_bounds = (image_distances > self.distance_range[0]) & (image_distances < self.distance_range[1])
+#             #Iterate through all the attack types of a given distance metric
 
 
-            #Check that the attack isn't trying to be performed on more images than are available
-            assert self.num_attack_examples <= transfer_images.shape[0], "*** Requested attack with more examples than are available in transfer attack dataset ***"
+#             print("\nPerforming " + self.transfer_distance_metric + " transfer attack with " + self.attack_type_dir + 
+#                 " attack examples generated on a " + self.model_adversarial_gen + " model")
+#             print("Evaluating " + str(self.num_attack_examples) + " adversarial example(s)")
 
-            for example_iter in range(self.num_attack_examples):
+#             assert self.model_adversarial_gen != self.model_under_attack, "*** Trying to use transfer attack with the model's own adversaries ***"
 
-                if satisfy_bounds[example_iter] == 1:
-                    execution_data = transfer_images[example_iter, :, :, :]
-                    execution_data = execution_data #np.expand_dims(execution_data, axis=0) #Reshape for 'forward' method used later
-                    execution_label = ground_truth_labels[example_iter]
+#             #Arrays for storing results of the evaluation
+#             adversary_found, adversary_distance = []
+#             adversary_distance = [] 
 
-                    adver_pred = fmodel.predictions(execution_data)
+#             #Note that attack_type_dir now determines the type of adversarial examples (i.e. how they were generated) that shoulbe *loaded*
+#             transfer_images_file = ('adversarial_images/transfer_images/' + self.model_adversarial_gen + '/' + 
+#                 self.attack_type_dir + '/adversaries_array.npy')
+#             ground_truth_file = ('adversarial_images/transfer_images/' + self.model_adversarial_gen + '/' + 
+#                 self.attack_type_dir + '/ground_truth_labels.csv')
+#             distances_file = ('adversarial_images/transfer_images/' + self.model_adversarial_gen + '/' + 
+#                 self.attack_type_dir + '/adversary_distances.csv')
 
-                    if np.argmax(adver_pred) == execution_label:
-                        print("The model correctly predicted the ground truth label of " + str(execution_label))
-                        adversary_found.append(0)
+#             #Load transfer_attack_images and reshape
+#             transfer_images = np.load(transfer_images_file, mmap_mode='r')
+#             transfer_images = np.reshape(transfer_images, [transfer_images.shape[0], 28, 28, 1])
+#             image_distances = np.genfromtxt(distances_file, delimiter=',')
 
-                    else:
-                        print("The classification label following attack is " + str(np.argmax(adver_pred)) + " from a ground-truth classification of " + str(execution_label))
-                        adversary_found.append(1)
+#             ground_truth_labels = np.genfromtxt(ground_truth_file, delimiter=',')
+
+#             #Check that the attack isn't trying to be performed on more images than are available
+#             assert self.num_attack_examples <= transfer_images.shape[0], "*** Requested attack with more examples than are available in transfer attack dataset ***"
+
+#             for example_iter in range(self.num_attack_examples):
+
+#                 execution_data = transfer_images[example_iter, :, :, :]
+#                 execution_data = execution_data #np.expand_dims(execution_data, axis=0) #Reshape for 'forward' method used later
+#                 execution_label = ground_truth_labels[example_iter]
+
+#                 adver_pred = fmodel.predictions(execution_data)
+
+#                 if np.argmax(adver_pred) == execution_label:
+#                     print("The model correctly predicted the ground truth label of " + str(execution_label))
+#                     adversary_found.append(0)
+
+#                 else:
+#                     print("The classification label following attack is " + str(np.argmax(adver_pred)) + " from a ground-truth classification of " + str(execution_label))
+#                     adversary_found.append(1)
+#                     #Take absolute value of image_distance to account for images that didn't actually fool the original model, and are hence stored negative
+#                     adversary_distance.append(abs(image_distances[example_iter]))
             
-            adversary_found = np.asarray(adversary_found)
+#             adversary_found = np.asarray(adversary_found)
             
-            return adversary_found
+#             return adversary_found, adversary_distance
 
 
 
