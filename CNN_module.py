@@ -3,6 +3,7 @@
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 import numpy as np
+import math
 from keras.datasets import mnist, fashion_mnist, cifar10
 from keras.utils import to_categorical
 from keras.preprocessing.image import ImageDataGenerator
@@ -233,9 +234,10 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases, 
         tf.add(tf.matmul(unpool_binding_activations, weights['course_bindingW1']), biases['dense_b1'])),
         tf.add(tf.matmul(gradient_unpool_binding_activations, weights['finegrained_bindingW1']), biases['dense_b1']))
 
-    logits, sparsity_dic = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
+    logits, sparsity_dic, l1_activations = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
+    l1_activations=0
 
-    return logits, sparsity_dic
+    return logits, sparsity_dic, l1_activations
 
 
 def controlCNN_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_var):
@@ -296,7 +298,7 @@ def VGG_predictions(features, dropout_rate_placeholder, weights, biases, dynamic
 
     dense1 = tf.add(tf.matmul(pool3_flat, weights['dense_W1']), biases['dense_b1'])
 
-    logits, sparsity_dic, _ = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic, l1_activations=tf.constant([0], dtype=tf.float32))
+    logits, sparsity_dic, l1_activations = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
     l1_activations=0 #We do not regularize L1-norm of activations in VGG
 
     return logits, sparsity_dic, l1_activations
@@ -364,7 +366,7 @@ def BindingVGG_predictions(features, dropout_rate_placeholder, weights, biases, 
         tf.matmul(gradient_unpool_binding_activations3, weights['finegrained_bindingW3'])), 
         biases['dense_b1'])
 
-    logits, sparsity_dic, l1_activations = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic, l1_activations=tf.constant([0], dtype=tf.float32))
+    logits, sparsity_dic, l1_activations = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
     l1_activations=0 #We do not regularize L1-norm of activations in VGG
 
     return logits, sparsity_dic, l1_activations
@@ -408,12 +410,9 @@ def conv1_sequence(features, dropout_rate_placeholder, weights, biases, sparsity
     pool1, pool1_indices = tf.nn.max_pool_with_argmax(relu1, ksize=(1,2,2,1), strides=(1,2,2,1), padding="VALID")
     pool1_drop = tf.nn.dropout(pool1, rate=dropout_rate_placeholder)
 
-    #Gather L1-norm for all layers for later regularization
-    l1_activations = tf.norm(relu1, ord=1, axis=None) #Returns L-1 norm over all values, including batch dimension
+    return pool1_drop, pool1_indices, sparsity_dic
 
-    return pool1_drop, pool1_indices, sparsity_dic, l1_activations
-
-def conv2_sequence(pool1_drop, dropout_rate_placeholder, weights, biases, sparsity_dic, l1_activations):
+def conv2_sequence(pool1_drop, dropout_rate_placeholder, weights, biases, sparsity_dic):
 
     conv2 = tf.nn.conv2d(pool1_drop, weights['conv_W2'], strides=[1,1,1,1], padding="VALID")
     conv2 = tf.nn.bias_add(conv2, biases['conv_b2'])
@@ -539,11 +538,12 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
         cost = (tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=predictions, labels=y_placeholder)) + 
             params['L1_regularization_scale']*l1_activations)
-        
         tf.summary.scalar('Softmax_cross_entropy', cost)
 
         correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+        total_accuracy = tf.reduce_sum(tf.cast(correct_prediction, tf.float32)) #Used to store batched accuracy for evaluating the test dataset
+        
         tf.summary.scalar('Accuracy', accuracy)
         accuracy_summary = tf.summary.scalar(name="Accuracy_values", tensor=accuracy)
 
@@ -576,7 +576,11 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
         #Initialize variables; note the requirement for explicit initialization prevents expensive
         #initializers from being re-run when e.g. relaoding a model from a checkpoint
         sess.run(tf.global_variables_initializer())
-        #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+
+
+        # #Run de-bugger
+        sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+        sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
 
         network_name_str = (str(iter_num) + params['architecture'] + '_L1-' + str(params['L1_regularization_scale']) + '_drop-' + str(params['dropout_rate']))
         print("\n\nTraining " + network_name_str)
@@ -602,22 +606,29 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
             training_summ, training_acc = sess.run([merged, accuracy], feed_dict={x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : 0.0})
             training_writer.add_summary(training_summ, epoch)
 
-            testing_acc = 0.0
-        #     testing_summ, testing_acc, testing_sparsity = sess.run([merged, accuracy, sparsity_dic], feed_dict={x_placeholder: testing_data, y_placeholder: testing_labels, dropout_rate_placeholder : 0.0})
+            #Find the accuracy on the test dataset using batches to avoid issues of memory capacity
+            accuracy_total = 0
+            for test_batch in range(math.ceil(len(testing_labels)/params['batch_size'])):
 
-        #     testing_writer.add_summary(testing_summ, epoch)
+                test_batch_x = testing_data[test_batch*params['batch_size']:min((test_batch+1)*params['batch_size'], len(testing_labels))]
+                test_batch_y = testing_labels[test_batch*params['batch_size']:min((test_batch+1)*params['batch_size'], len(testing_labels))]
+
+                batch_testing_acc, batch_testing_sparsity = sess.run([total_accuracy, sparsity_dic], feed_dict={x_placeholder: test_batch_x, y_placeholder: test_batch_y, dropout_rate_placeholder : 0.0})
+                accuracy_total += batch_testing_acc
+
+            testing_acc = accuracy_total/len(testing_labels)
+            #testing_writer.add_summary(testing_acc, epoch)
 
             print("At iteration " + str(epoch) + ", Loss = " + \
                  "{:.4f}".format(loss) + ", Training Accuracy = " + \
                                 "{:.4f}".format(training_acc) + ", Testing Accuracy = " + \
                                 "{:.4f}".format(testing_acc))
 
-
         print("Training complete")
 
         save_path = saver.save(sess, "network_weights_data/" + network_name_str + ".ckpt")
 
-        # print("Final testing Accuracy:","{:.5f}".format(testing_acc))
+        print("Final testing Accuracy:","{:.5f}".format(testing_acc))
 
 
         # print("\nLayer-wise sparsity:")
@@ -627,7 +638,7 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
 
         training_writer.close()
-        # testing_writer.close()
+        testing_writer.close()
 
         return training_acc , testing_acc, network_name_str
 
