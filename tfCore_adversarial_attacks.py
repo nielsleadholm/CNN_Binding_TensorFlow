@@ -61,6 +61,7 @@ class native_cleverhans_model(Model):
     Model.__init__(self, scope, nb_classes, locals())
     self.model_prediction_function = model_prediction_function
     self.dropout_rate_placeholder = dropout_rate_placeholder
+    self.dynamic_var = dynamic_var
 
     # Do a dummy run of fprop to make sure the variables are created from
     # the start
@@ -94,7 +95,7 @@ class native_cleverhans_model(Model):
         'output_b' : tf.get_variable('Ob', shape=(10), initializer=initializer, regularizer=regularizer_l1)
         }
 
-        logits, _ = self.model_prediction_function(x, self.dropout_rate_placeholder, self.weights, self.biases)
+        logits, _, _, _ = self.model_prediction_function(x, self.dropout_rate_placeholder, self.weights, self.biases, self.dynamic_var)
 
         return {self.O_LOGITS: logits,
               self.O_PROBS: tf.nn.softmax(logits=logits)}
@@ -115,6 +116,7 @@ class parent_attack:
             self.dropout_rate_placeholder = attack_dic['dropout_rate_placeholder']
             self.output_directory = attack_dic['output_directory']
             self.num_attack_examples = attack_dic['num_attack_examples']
+            self.dynamic_var = attack_dic['dynamic_var'] #Determines if e.g. a network section is ablated, or noise is added to the logits
             self.criterion = criterion #note by default this is simply foolbox's Misclassification criterion
             self.dropout_rate = dropout_rate #also provided with default value above
 
@@ -125,7 +127,7 @@ class parent_attack:
 
     def evaluate_resistance(self):
 
-        logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
+        logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_var)
         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
 
         with tf.Session() as session:
@@ -140,12 +142,12 @@ class parent_attack:
             #Arrays for storing results of the evaluation
             adversary_found = np.zeros([self.num_attack_examples]) #array of booleans that indicates if an adversary was found for a particular image
             adversary_distance = np.zeros([self.num_attack_examples])
-            adversaries_array = np.zeros([self.num_attack_examples, self.input_data.shape[1], self.input_data.shape[2], 1])
+            adversaries_array = np.zeros([self.num_attack_examples, self.input_data.shape[1], self.input_data.shape[2], self.input_data.shape[3]])
             perturb_list = []
 
             for example_iter in range(self.num_attack_examples):
 
-                execution_data = self.input_data[example_iter, :, :]
+                execution_data = self.input_data[example_iter, :, :, :]
                 execution_label = np.argmax(self.input_labels[example_iter,:])
 
                 #Check the predicted label of the network prior to carrying out the attack isn't already incorrect
@@ -166,7 +168,7 @@ class parent_attack:
                 if np.any(adversarial_image_fmodel == None):
                     print("\n\n *** No adversarial image found - attack returned None *** \n\n")
                     #Set distance negative so that accuracy at a given thresholded can later be found
-                    adversary_distance[example_iter] = -1
+                    adversary_distance[example_iter] = np.inf
 
 
                 #If the image is still correctly classified, iteratively perturb it by increasing the adversarial mask until the image is misclassified
@@ -219,9 +221,14 @@ class parent_attack:
         adversarial_image_fmodel_reshape = adversarial_image_fmodel #np.expand_dims(adversarial_image_fmodel, axis=0)
         adver_pred = fmodel.predictions(adversarial_image_fmodel_reshape)
 
-        plt.imsave('adversarial_images/' + self.output_directory + '/' + 
-            self.attack_type_dir + '/AttackNum' + str(example_iter) + '_Predicted' + str(np.argmax(adver_pred)) + 
-            '_GroundTruth' + str(execution_label) + '.png', adversarial_image_fmodel[:,:,0], cmap='gray')
+        if adversarial_image_fmodel.shape[2] == 3:
+            cmap='rgb'
+        elif adversarial_image_fmodel.shape[2] == 1:
+            cmap=plt.cm.gray
+
+        # plt.imsave('adversarial_images/' + self.output_directory + '/' + 
+        #     self.attack_type_dir + '/AttackNum' + str(example_iter) + '_Predicted' + str(np.argmax(adver_pred)) + 
+        #     '_GroundTruth' + str(execution_label) + '.png', adversarial_image_fmodel[:,:,:], cmap=cmap)
 
         print("The classification label following attack is " + str(np.argmax(adver_pred)) + " from an original classification of " + str(execution_label))
         distance, distance_name = self.distance_metric(execution_data.flatten(), adversarial_image_fmodel.flatten())
@@ -281,7 +288,7 @@ class check_stochasticity(parent_attack):
 
     def perform_check(self):
 
-            logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
+            logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
             saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
 
             with tf.Session() as session:
@@ -344,7 +351,7 @@ class check_stochasticity(parent_attack):
 
 #     def evaluate_resistance(self):
 
-#         logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
+#         logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
 #         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
 
 #         with tf.Session() as session:
