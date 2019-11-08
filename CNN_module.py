@@ -140,8 +140,6 @@ def initializer_fun(params, training_data, training_labels):
                 weights['finegrained_bindingW1'] = tf.get_variable('fineW1', shape=(16*16*32, 120), initializer=initializer)
                 weights['course_bindingW2'] = tf.get_variable('courseW2', shape=(8*8*128, 120), initializer=initializer)
                 weights['finegrained_bindingW2'] = tf.get_variable('fineW2', shape=(8*8*64, 120), initializer=initializer)
-                weights['course_bindingW3'] = tf.get_variable('courseW3', shape=(32*32*32, 120), initializer=initializer)
-                weights['finegrained_bindingW3'] = tf.get_variable('fineW3', shape=(8*8*128, 120), initializer=initializer)
 
             #Add summaries for each weightseight variable in the dictionary, for later use in TensorBoard
             for weights_var in weights.values():
@@ -172,8 +170,6 @@ def initializer_fun(params, training_data, training_labels):
                 var_list.append(weights['finegrained_bindingW1'])
                 var_list.append(weights['course_bindingW2'])
                 var_list.append(weights['finegrained_bindingW2'])
-                var_list.append(weights['course_bindingW3'])
-                var_list.append(weights['finegrained_bindingW3'])
     
     return x, y, dropout_rate_placeholder, var_list, weights, biases
 
@@ -191,9 +187,9 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynam
     pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 16])
     dense1 = tf.add(tf.matmul(pool2_flat, weights['dense_W1']), biases['dense_b1'])
 
-    logits, sparsity_dic, l1_activations = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
+    logits, sparsity_dic = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
-    return logits, sparsity_dic, l1_activations
+    return logits, sparsity_dic
 
 def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_var):
 
@@ -214,7 +210,7 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases, 
     #'Fine-grained' binding information from gradient unpooling
     gradient_unpool_binding_activations, sparsity_dic = gradient_unpooling_sequence(high_level=pool2_drop, 
         low_level=pool1_drop, low_flat_shape=[-1, 14 * 14 * 6], dropout_rate_placeholder=dropout_rate_placeholder, 
-        weights=weights, biases=biases, sparsity_dic=sparsity_dic)
+        sparsity_dic=sparsity_dic)
 
     if dynamic_var == "Ablate_unpooling":
         print("Ablating unpooling activations...")
@@ -229,15 +225,16 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases, 
     elif dynamic_var == "Ablate_maxpooling":
         pool2_flat = tf.zeros(shape=tf.shape(pool2_flat))
 
+    dense1 = tf.add(tf.matmul(pool2_flat, weights['dense_W1']),
+        tf.add(tf.matmul(unpool_binding_activations, weights['course_bindingW1']),
+        tf.add(tf.matmul(gradient_unpool_binding_activations, weights['finegrained_bindingW1']), biases['dense_b1'])))
 
-    dense1 = tf.add(tf.add(tf.add(tf.matmul(pool2_flat, weights['dense_W1']), biases['dense_b1']),
-        tf.add(tf.matmul(unpool_binding_activations, weights['course_bindingW1']), biases['dense_b1'])),
-        tf.add(tf.matmul(gradient_unpool_binding_activations, weights['finegrained_bindingW1']), biases['dense_b1']))
+    unpool_l1_activations = tf.norm(unpool_binding_activations, ord=1, axis=None)
+    gradient_unpool_l1_activations = tf.norm(gradient_unpool_binding_activations, ord=1, axis=None)
 
-    logits, sparsity_dic, l1_activations = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
-    l1_activations=0
+    logits, sparsity_dic = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
-    return logits, sparsity_dic, l1_activations
+    return logits, sparsity_dic, unpool_l1_activations, gradient_unpool_l1_activations
 
 
 def controlCNN_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_var):
@@ -251,17 +248,19 @@ def controlCNN_predictions(features, dropout_rate_placeholder, weights, biases, 
     pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 16])
 
     #Operations distinct from other networks:
-    unpool_binding_activations_flat = tf.reshape(relu2, [-1, 10*10*16])
+    unpool_binding_activations = tf.reshape(relu2, [-1, 10*10*16])
     gradient_unpool_binding_activations = tf.reshape(pool1_drop, [-1, 14*14*6])
 
     sparsity_dic['gradient_unpool_sparsity'] = tf.math.zero_fraction(gradient_unpool_binding_activations)
 
-    dense1 = tf.add(tf.add(tf.add(tf.matmul(pool2_flat, weights['dense_W1']), biases['dense_b1']),
-        tf.add(tf.matmul(unpool_binding_activations_flat, weights['course_bindingW1']), biases['dense_b1'])),
-        tf.add(tf.matmul(gradient_unpool_binding_activations, weights['finegrained_bindingW1']), biases['dense_b1']))
+    dense1 = tf.add(tf.matmul(pool2_flat, weights['dense_W1']),
+        tf.add(tf.matmul(unpool_binding_activations, weights['course_bindingW1']),
+        tf.add(tf.matmul(gradient_unpool_binding_activations, weights['finegrained_bindingW1']), biases['dense_b1'])))
 
     logits, sparsity_dic = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
+    unpool_l1_activations = tf.norm(unpool_binding_activations, ord=1, axis=None)
+    gradient_unpool_l1_activations = tf.norm(gradient_unpool_binding_activations, ord=1, axis=None)
 
     if dynamic_var == 'add_logit_noise':
         print("Adding noise to logits")
@@ -269,7 +268,7 @@ def controlCNN_predictions(features, dropout_rate_placeholder, weights, biases, 
         logits = logits + tf.random.normal(tf.shape(logits), mean=0.0, stddev=5.0)
 
 
-    return logits, sparsity_dic
+    return logits, sparsity_dic, unpool_l1_activations, gradient_unpool_l1_activations
 
 
 def VGG_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_var):
@@ -279,17 +278,17 @@ def VGG_predictions(features, dropout_rate_placeholder, weights, biases, dynamic
     sparsity_dic = {} #Store the sparsity of layer activations for later analysis
     
     #First VGG block
-    pool1_drop, _, _, sparsity_dic = VGG_conv_sequence(inputs=tf.dtypes.cast(features, dtype=tf.float32), dropout_rate_placeholder=dropout_rate_placeholder, 
+    pool1_drop, _, _, _, sparsity_dic = VGG_conv_sequence(inputs=tf.dtypes.cast(features, dtype=tf.float32), dropout_rate_placeholder=dropout_rate_placeholder, 
         conv_weights=[weights['conv_W1'], weights['conv_W2']], conv_biases=[biases['conv_b1'], biases['conv_b2']], 
         sparsity_dic=sparsity_dic, VGG_block=1)
 
     #Second VGG block
-    pool2_drop, _, _, sparsity_dic = VGG_conv_sequence(inputs=pool1_drop, dropout_rate_placeholder=dropout_rate_placeholder, 
+    pool2_drop, _, _, _, sparsity_dic = VGG_conv_sequence(inputs=pool1_drop, dropout_rate_placeholder=dropout_rate_placeholder, 
         conv_weights=[weights['conv_W3'], weights['conv_W4']], conv_biases=[biases['conv_b3'], biases['conv_b4']], 
         sparsity_dic=sparsity_dic, VGG_block=2)
 
     #Third VGG block
-    pool3_drop, _, _, sparsity_dic = VGG_conv_sequence(inputs=pool2_drop, dropout_rate_placeholder=dropout_rate_placeholder, 
+    pool3_drop, _, _, _, sparsity_dic = VGG_conv_sequence(inputs=pool2_drop, dropout_rate_placeholder=dropout_rate_placeholder, 
         conv_weights=[weights['conv_W5'], weights['conv_W6']], conv_biases=[biases['conv_b5'], biases['conv_b6']], 
         sparsity_dic=sparsity_dic, VGG_block=3)
 
@@ -298,10 +297,13 @@ def VGG_predictions(features, dropout_rate_placeholder, weights, biases, dynamic
 
     dense1 = tf.add(tf.matmul(pool3_flat, weights['dense_W1']), biases['dense_b1'])
 
-    logits, sparsity_dic, l1_activations = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
-    l1_activations=0 #We do not regularize L1-norm of activations in VGG
+    logits, sparsity_dic = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
-    return logits, sparsity_dic, l1_activations
+    #We do not regularize activations with L1 norm in the VGG networks, so pass 0
+    unpool_l1_activations = 0
+    gradient_unpool_l1_activations = 0
+
+    return logits, sparsity_dic, unpool_l1_activations, gradient_unpool_l1_activations
 
 def BindingVGG_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_var):
 
@@ -314,11 +316,6 @@ def BindingVGG_predictions(features, dropout_rate_placeholder, weights, biases, 
         conv_weights=[weights['conv_W1'], weights['conv_W2']], conv_biases=[biases['conv_b1'], biases['conv_b2']], 
         sparsity_dic=sparsity_dic, VGG_block=1)
 
-    unpool_binding_activations3, sparsity_dic = unpooling_sequence(pool_drop=pool1_drop, 
-        pool_indices=pool1_indices, relu=relu1B, relu_flat_shape=[-1, 32*32*32], 
-        dropout_rate_placeholder=dropout_rate_placeholder, sparsity_dic=sparsity_dic)
-
-
     #Second VGG block
     pool2_drop, pool2_indices, relu2B, _, sparsity_dic = VGG_conv_sequence(inputs=pool1_drop, dropout_rate_placeholder=dropout_rate_placeholder, 
         conv_weights=[weights['conv_W3'], weights['conv_W4']], conv_biases=[biases['conv_b3'], biases['conv_b4']], 
@@ -328,7 +325,6 @@ def BindingVGG_predictions(features, dropout_rate_placeholder, weights, biases, 
         pool_indices=pool2_indices, relu=relu2B, relu_flat_shape=[-1, 16*16*64], 
         dropout_rate_placeholder=dropout_rate_placeholder, sparsity_dic=sparsity_dic)
 
-
     #Third VGG block
     pool3_drop, pool3_indices, relu3B, relu3A, sparsity_dic = VGG_conv_sequence(inputs=pool2_drop, dropout_rate_placeholder=dropout_rate_placeholder, 
         conv_weights=[weights['conv_W5'], weights['conv_W6']], conv_biases=[biases['conv_b5'], biases['conv_b6']], 
@@ -337,7 +333,6 @@ def BindingVGG_predictions(features, dropout_rate_placeholder, weights, biases, 
     unpool_binding_activations2, sparsity_dic = unpooling_sequence(pool_drop=pool3_drop, 
         pool_indices=pool3_indices, relu=relu3B, relu_flat_shape=[-1, 8*8*128], 
         dropout_rate_placeholder=dropout_rate_placeholder, sparsity_dic=sparsity_dic)
-    
 
     #Gradient unpooling
     gradient_unpool_binding_activations1, sparsity_dic = gradient_unpooling_sequence(high_level=pool3_drop, 
@@ -347,29 +342,25 @@ def BindingVGG_predictions(features, dropout_rate_placeholder, weights, biases, 
     gradient_unpool_binding_activations2, sparsity_dic = gradient_unpooling_sequence(high_level=pool3_drop, 
         low_level=pool2_drop, low_flat_shape=[-1,8*8*64], dropout_rate_placeholder=dropout_rate_placeholder, 
         sparsity_dic=sparsity_dic)
-    
-    gradient_unpool_binding_activations3, sparsity_dic = gradient_unpooling_sequence(high_level=pool3_drop, 
-        low_level=relu3A, low_flat_shape=[-1,8*8*128], dropout_rate_placeholder=dropout_rate_placeholder, 
-        sparsity_dic=sparsity_dic)
-
 
 
     pool3_flat = tf.reshape(pool3_drop, [-1, 4 * 4 * 128])
 
-    dense1 = tf.add(tf.add(tf.add(tf.add(tf.add(tf.add(tf.add(
+    dense1 = tf.add(tf.add(tf.add(tf.add(tf.add(
         tf.matmul(pool3_flat, weights['dense_W1']), 
         tf.matmul(unpool_binding_activations1, weights['course_bindingW1'])),
         tf.matmul(gradient_unpool_binding_activations1, weights['finegrained_bindingW1'])),
         tf.matmul(unpool_binding_activations2, weights['course_bindingW2'])),
         tf.matmul(gradient_unpool_binding_activations2, weights['finegrained_bindingW2'])), 
-        tf.matmul(unpool_binding_activations3, weights['course_bindingW3'])),
-        tf.matmul(gradient_unpool_binding_activations3, weights['finegrained_bindingW3'])), 
         biases['dense_b1'])
 
-    logits, sparsity_dic, l1_activations = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
-    l1_activations=0 #We do not regularize L1-norm of activations in VGG
+    logits, sparsity_dic = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
-    return logits, sparsity_dic, l1_activations
+    #We do not regularize activations with L1 norm in the VGG networks, so pass 0
+    unpool_l1_activations = 0
+    gradient_unpool_l1_activations = 0
+
+    return logits, sparsity_dic, unpool_l1_activations, gradient_unpool_l1_activations
 
 def unpooling_sequence(pool_drop, pool_indices, relu, relu_flat_shape, dropout_rate_placeholder, sparsity_dic):
     
@@ -435,9 +426,7 @@ def fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
     sparsity_dic['dense2_sparsity'] = tf.math.zero_fraction(dense2_drop)
     logits = tf.add(tf.matmul(dense2_drop, weights['output_W']), biases['output_b'])
 
-    l1_activations = tf.norm(dense2_drop, ord=1, axis=None)
-
-    return logits, sparsity_dic, l1_activations
+    return logits, sparsity_dic
 
 def VGG_conv_sequence(inputs, dropout_rate_placeholder, conv_weights, conv_biases, sparsity_dic, VGG_block):
 
@@ -526,18 +515,18 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
     if params['meta_architecture'] == 'CNN':
         if params['architecture'] == 'LeNet':
-            predictions, sparsity_dic, l1_activations = LeNet_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var']) 
+            predictions, sparsity_dic, unpool_l1_activations, gradient_unpool_l1_activations = LeNet_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var']) 
         elif params['architecture'] == 'VGG':
-            predictions, sparsity_dic, l1_activations = VGG_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var'])
+            predictions, sparsity_dic, unpool_l1_activations, gradient_unpool_l1_activations = VGG_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var'])
         elif params['architecture'] == 'BindingCNN':
-            predictions, sparsity_dic, l1_activations = BindingCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var']) 
+            predictions, sparsity_dic, unpool_l1_activations, gradient_unpool_l1_activations = BindingCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var']) 
         elif params['architecture'] == 'BindingVGG':
-            predictions, sparsity_dic, l1_activations = BindingVGG_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var']) 
+            predictions, sparsity_dic, unpool_l1_activations, gradient_unpool_l1_activations = BindingVGG_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var']) 
         elif params['architecture'] == 'controlCNN':
-            predictions, sparsity_dic, l1_activations = controlCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var']) 
+            predictions, sparsity_dic, unpool_l1_activations, gradient_unpool_l1_activations = controlCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_var']) 
 
         cost = (tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=predictions, labels=y_placeholder)) + 
-            params['L1_regularization_scale']*l1_activations)
+            params['L1_regularization_scale_unpool']*unpool_l1_activations + params['L1_regularization_scale_gradient_unpool']*gradient_unpool_l1_activations)
         tf.summary.scalar('Softmax_cross_entropy', cost)
 
         correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
@@ -579,10 +568,10 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
 
         # #Run de-bugger
-        sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-        sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
+        # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+        # sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
 
-        network_name_str = (str(iter_num) + params['architecture'] + '_L1-' + str(params['L1_regularization_scale']) + '_drop-' + str(params['dropout_rate']))
+        network_name_str = (str(iter_num) + params['architecture'] + '_drop-' + str(params['dropout_rate']))
         print("\n\nTraining " + network_name_str)
         training_writer = tf.summary.FileWriter('tensorboard_data/tb_' + network_name_str + '/training', sess.graph)
         testing_writer = tf.summary.FileWriter('tensorboard_data/tb_' + network_name_str + '/testing')
@@ -613,7 +602,7 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
                 test_batch_x = testing_data[test_batch*params['batch_size']:min((test_batch+1)*params['batch_size'], len(testing_labels))]
                 test_batch_y = testing_labels[test_batch*params['batch_size']:min((test_batch+1)*params['batch_size'], len(testing_labels))]
 
-                batch_testing_acc, batch_testing_sparsity = sess.run([total_accuracy, sparsity_dic], feed_dict={x_placeholder: test_batch_x, y_placeholder: test_batch_y, dropout_rate_placeholder : 0.0})
+                batch_testing_acc = sess.run(total_accuracy, feed_dict={x_placeholder: test_batch_x, y_placeholder: test_batch_y, dropout_rate_placeholder : 0.0})
                 accuracy_total += batch_testing_acc
 
             testing_acc = accuracy_total/len(testing_labels)
@@ -630,11 +619,14 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
         print("Final testing Accuracy:","{:.5f}".format(testing_acc))
 
+        #On small-memory data-sets, check layer-wise sparsity
+        if params['dataset']!='cifar10':
+            testing_sparsity = sess.run(sparsity_dic, feed_dict={x_placeholder: testing_data, y_placeholder: testing_labels, dropout_rate_placeholder : 0.0})
 
-        # print("\nLayer-wise sparsity:")
-        # print(testing_sparsity)
+            print("\nLayer-wise sparsity:")
+            print(testing_sparsity)
 
-        # print("Mean sparsity is " + str(np.mean(np.fromiter(testing_sparsity.values(), dtype=float))))
+            print("Mean sparsity is " + str(np.mean(np.fromiter(testing_sparsity.values(), dtype=float))))
 
 
         training_writer.close()
@@ -645,14 +637,15 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 #Runs if using the .py file in isolation, to test e.g. a particular network setup
 if __name__ == '__main__':
 
-    params = {'architecture':'BindingVGG',
+    params = {'architecture':'controlCNN',
     'dynamic_var':'None',
-    'dataset':'cifar10',
+    'dataset':'mnist',
     'meta_architecture':'CNN',
-    'training_epochs':2,
+    'training_epochs':30,
     'crossval_bool':False,
     'dropout_rate':0.25,
-    'L1_regularization_scale':0.0,
+    'L1_regularization_scale_unpool':0.0001,
+    'L1_regularization_scale_gradient_unpool':0.0001,
     'learning_rate':0.001,
     'batch_size':128} #NB that drop-out 'rate' = 1 - 'keep probability'
 
