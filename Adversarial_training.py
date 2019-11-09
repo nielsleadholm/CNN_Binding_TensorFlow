@@ -36,7 +36,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 FLAGS = flags.FLAGS
 
-NB_EPOCHS = 3
+NB_EPOCHS = 30
 BATCH_SIZE = 128
 LEARNING_RATE = 0.001
 CLEAN_TRAIN = False
@@ -44,7 +44,7 @@ BACKPROP_THROUGH_ATTACK = True
 NB_FILTERS = 64
 
 
-def mnist_tutorial(train_start=0, train_end=60000, test_start=0,
+def adver_training(train_start=0, train_end=60000, test_start=0,
                    test_end=10000, nb_epochs=NB_EPOCHS, batch_size=BATCH_SIZE,
                    learning_rate=LEARNING_RATE,
                    clean_train=CLEAN_TRAIN,
@@ -74,10 +74,6 @@ def mnist_tutorial(train_start=0, train_end=60000, test_start=0,
 
   # Object used to keep track of (and return) key accuracies
   report = AccuracyReport()
-
-  # Set TF random seed to improve reproducibility
-  tf.set_random_seed(1234)
-
   # Set logging level to see debug information
   set_log_level(logging.DEBUG)
 
@@ -133,65 +129,65 @@ def mnist_tutorial(train_start=0, train_end=60000, test_start=0,
 
   model_params = {
     'architecture':'BindingCNN',
-    'control_modification':None,
     'meta_architecture':'CNN',
     'dataset':'mnist',
     'dropout_rate':0.25,
+    'dynamic_var':0
     }
   
-  if clean_train:
-    model = native_cleverhans_model(scope='model1', 
-					                nb_classes=10, 
-					                model_prediction_function=getattr(CNN, model_params['architecture'] + '_predictions'),
-                                    dropout_rate_placeholder=dropout_rate_placeholder,
-					                meta_architecture=model_params['meta_architecture'])
+  # if clean_train:
+  #   model = native_cleverhans_model(scope='model1', 
+		# 			                nb_classes=10, 
+		# 			                model_prediction_function=getattr(CNN, model_params['architecture'] + '_predictions'),
+  #                                   dropout_rate_placeholder=dropout_rate_placeholder,
+		# 			                meta_architecture=model_params['meta_architecture'])
 
-    preds = model.get_logits(x)
-    loss = custom_cleverhans_loss(model, smoothing=label_smoothing)
+  #   preds = model.get_logits(x)
+  #   loss = custom_cleverhans_loss(model, smoothing=label_smoothing)
 
-    def evaluate():
-      do_eval(preds, x_test, y_test, 'clean_train_clean_eval', False)
+  #   def evaluate():
+  #     do_eval(preds, x_test, y_test, 'clean_train_clean_eval', False)
 
-    train(sess, loss, x_train, y_train, evaluate=evaluate,
-          feed={dropout_rate_placeholder : model_params['dropout_rate']}, args=train_params, rng=rng, var_list=model.get_params())
+  #   train(sess, loss, x_train, y_train, evaluate=evaluate,
+  #         feed={dropout_rate_placeholder : model_params['dropout_rate']}, args=train_params, rng=rng, var_list=model.get_params())
 
-    # Calculate training error
-    if testing:
-      do_eval(preds, x_train, y_train, 'train_clean_train_clean_eval')
+  #   # Calculate training error
+  #   if testing:
+  #     do_eval(preds, x_train, y_train, 'train_clean_train_clean_eval')
 
-    # Initialize the Fast Gradient Sign Method (FGSM) attack object and
-    # graph
-
-
-    #fgsm = FastGradientMethod(model, sess=sess)
-    #adv_x = fgsm.generate(x, **fgsm_params)
-    Madry_attack = MadryEtAl(model, sess=sess)
-    adv_x = Madry_attack.generate(x)
-    # DeepFool_attack = DeepFool(model, sess=sess)
-    # adv_x = DeepFool_attack.generate(x)
+  #   # Initialize the Fast Gradient Sign Method (FGSM) attack object and
+  #   # graph
 
 
-    preds_adv = model.get_logits(adv_x)
+  #   #fgsm = FastGradientMethod(model, sess=sess)
+  #   #adv_x = fgsm.generate(x, **fgsm_params)
+  #   Madry_attack = MadryEtAl(model, sess=sess)
+  #   adv_x = Madry_attack.generate(x)
+  #   # DeepFool_attack = DeepFool(model, sess=sess)
+  #   # adv_x = DeepFool_attack.generate(x)
 
-    # Evaluate the accuracy of the MNIST model on adversarial examples
-    do_eval(preds_adv, x_test, y_test, 'clean_train_adv_eval', True)
 
-    # Calculate training error
-    if testing:
-      do_eval(preds_adv, x_train, y_train, 'train_clean_train_adv_eval')
+  #   preds_adv = model.get_logits(adv_x)
 
-    print('Repeating the process, using adversarial training')
+  #   # Evaluate the accuracy of the MNIST model on adversarial examples
+  #   do_eval(preds_adv, x_test, y_test, 'clean_train_adv_eval', True)
+
+  #   # Calculate training error
+  #   if testing:
+  #     do_eval(preds_adv, x_train, y_train, 'train_clean_train_adv_eval')
+
+  #   print('Repeating the process, using adversarial training')
 
   # Create a new model and train it to be robust to FastGradientMethod
-    model2 = native_cleverhans_model(scope='BindingCNN', 
-                                    nb_classes=10, 
-                                    model_prediction_function=getattr(CNN, model_params['architecture'] + '_predictions'),
-                                    dropout_rate_placeholder=dropout_rate_placeholder,
-                                    meta_architecture=model_params['meta_architecture'])
-    fgsm2 = FastGradientMethod(model2, sess=sess)
-    Madry_attack2 = MadryEtAl(model2, sess=sess)
+  model2 = native_cleverhans_model(scope=model_params['architecture'], 
+                                  nb_classes=10, 
+                                  model_prediction_function=getattr(CNN, model_params['architecture'] + '_predictions'),
+                                  dropout_rate_placeholder=dropout_rate_placeholder,
+                                  dynamic_var=model_params['dynamic_var'])
+  fgsm2 = FastGradientMethod(model2, sess=sess)
+  Madry_attack2 = MadryEtAl(model2, sess=sess)
 
-    saver = tf.train.Saver(model2.get_params())
+  saver = tf.train.Saver(model2.get_params())
 
 
   def attack(x):
