@@ -25,8 +25,8 @@ model_params = {
     'training_epochs':30,
     'dropout_rate':0.25,
     'label_smoothing':0.1,
-    'L1_regularization_activations1':0.0,
-    'L1_regularization_activations2':0.0,
+    'L1_regularization_activations1':0.0001,
+    'L1_regularization_activations2':0.0001,
     'batch_size':128
     }
 
@@ -37,10 +37,13 @@ def test_mltest_suite(model_params):
 
     x_placeholder, y_placeholder, dropout_rate_placeholder, var_list, weights, biases = CNN.initializer_fun(model_params, training_data, training_labels)
 
-    predictions, _, _, _ = getattr(CNN, model_params['architecture'] + '_predictions')(x_placeholder, 
-    dropout_rate_placeholder, weights, biases, model_params['dynamic_var'])
+    predictions, _, l1_reg_activations1, l1_reg_activations2 = getattr(CNN, model_params['architecture'] + '_predictions')(x_placeholder, 
+        dropout_rate_placeholder, weights, biases, model_params['dynamic_var'])
 
-    cost = tf.reduce_mean(tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(logits=predictions, labels=y_placeholder))
+    cost = (tf.reduce_mean(tf.compat.v1.losses.softmax_cross_entropy(logits=predictions, 
+        onehot_labels=y_placeholder, label_smoothing=params['label_smoothing'])) + 
+        params['L1_regularization_activations1']*l1_reg_activations1 + 
+        params['L1_regularization_activations2']*l1_reg_activations2)
 
     train_op = tf.compat.v1.train.AdamOptimizer(learning_rate=model_params['learning_rate']).minimize(cost)
 
