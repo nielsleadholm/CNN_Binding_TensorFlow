@@ -77,39 +77,6 @@ class parent_attack:
                         #As in Schott, 2019 et al, the distance of an unsuccessful attack is recorded as infinity
                         adversary_distance[batch_iter*self.batch_size + example_iter] = np.inf
 
-                    #Ocasionally the image returned by FoolBox will be correctly classified by the network when passed through again
-                    #If the image is still correctly classified, iteratively perturb it by increasing the adversarial mask until the image is misclassified
-                    # elif np.argmax(fmodel.forward(adversarial_images[None, example_iter])) == execution_batch_labels[example_iter]:
-                    #     print("\n *The model correctly predicted " + str(np.argmax(fmodel.forward(adversarial_images[None, example_iter]))) + " with a ground truth of " + str(execution_batch_labels[example_iter]))
-                    #     print("Iteratively enhancing perturbation until misclassified again...")
-                    #     multiplier = 1.0001 #Initialize the multiplier
-                    #     #Evaluate with the initial perturbation
-                    #     adversarial_image_perturbed = execution_batch_data[example_iter] + multiplier*(adversarial_images[example_iter] - execution_batch_data[example_iter])
-                    #     #Clip the pixel values to lie within the given range
-                    #     adversarial_image_perturbed = np.clip(adversarial_image_perturbed, 0, 1)
-                    #     adver_pred_perturbed = fmodel.forward(adversarial_image_perturbed[None, :, :, :])
-
-                    #     while np.argmax(adver_pred_perturbed) == execution_batch_labels[example_iter]:
-                    #         multiplier += 0.001
-                    #         adversarial_image_perturbed = execution_batch_data[example_iter] + multiplier*(adversarial_images[example_iter] - execution_batch_data[example_iter])
-                    #         adversarial_image_perturbed = np.clip(adversarial_image_perturbed, 0, 1)
-                    #         adver_pred_perturbed = fmodel.forward(adversarial_image_perturbed[None, :, :, :])
-
-                    #         #Check if all the values of the image are maximally perturbed, in which case break
-                    #         if np.all((adversarial_image_perturbed==0) | (adversarial_image_perturbed==1))==True:
-                    #             print("\n\n***Maximally perturbed returned image, but still not misclassified\n\n")
-                    #             print(adversarial_image_perturbed)
-                    #             adversary_distance[batch_iter*self.batch_size + example_iter] = np.inf
-                    #             break
-
-                    #     #Check it wasn't a maximally perturbed image:
-                    #     if np.all((adversarial_image_perturbed==0) | (adversarial_image_perturbed==1))==False:
-                    #         print("Perturbed classification is " + str(np.argmax(adver_pred_perturbed)) + " following additional perturbation of " +str(multiplier))
-
-                    #         adversarial_images[example_iter] = adversarial_image_perturbed[:, :, :] #update the adversarial image to reflect the genuinely misclassified image
-                    #         adversary_found, adversary_distance, adversaries_array = self.store_data(adversary_found, adversary_distance, adversaries_array,
-                    #          execution_batch_data[example_iter], execution_batch_labels[example_iter], adversarial_images[example_iter], batch_iter*self.batch_size + example_iter, fmodel)
-
                     else:
                         adversary_found, adversary_distance, adversaries_array = self.store_data(adversary_found, adversary_distance, adversaries_array,
                             execution_batch_data[example_iter], execution_batch_labels[example_iter], adversarial_images[example_iter], batch_iter*self.batch_size + example_iter, fmodel)
@@ -140,11 +107,9 @@ class parent_attack:
         if self.save_images == True:
             if adversarial_image.shape[2] == 3:
                 image_to_png = adversarial_image
-                print(image_to_png.shape)
             elif adversarial_image.shape[2] == 1:
                 #cmap=plt.cm.gray
                 image_to_png = np.squeeze(adversarial_image, axis=2) #Remove last dimension if saving to greyscale
-                print(image_to_png.shape)
 
             plt.imsave('adversarial_images/' + self.output_directory + '/' + 
                 self.attack_type_dir + '/AttackNum' + str(results_iter) + '_Predicted' + str(np.argmax(fmodel.forward(adversarial_image[None, :, :, :]))) + 
@@ -169,20 +134,17 @@ class check_stochasticity(parent_attack):
     def perform_check(self):
 
             logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
-            saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
+            saver = tf.train.Saver(self.var_list)
 
             with tf.Session() as session:
-                saver.restore(session, self.model_weights) #Note when restoring weights its important not to run init on the same
-                #variables, as this will over-write the learned weights with randomly initialized ones
-                #Define the foolbox model
+                saver.restore(session, self.model_weights) 
                 fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
 
                 print('Checking the models performance on multiple runs of the same images')
 
                 for example_iter in range(self.num_attack_examples):
 
-                    execution_data = self.input_data[example_iter, :, :]
-                    execution_data_reshape = execution_data #np.expand_dims(execution_data, axis=0)
+                    execution_data = self.input_data[example_iter, :, :, :]
 
                     logits_list = []
                     labels_list = []
@@ -190,7 +152,7 @@ class check_stochasticity(parent_attack):
                     #Check the same image with multiple runs
                     for ii in range(10):
                         #Return the logits and label of the model
-                        predicted_logits = fmodel.forward(execution_data_reshape)
+                        predicted_logits = fmodel.forward(execution_data)
                         print(predicted_logits)
                         # print(predicted_logits[0][0])
                         # print(np.dtype(predicted_logits[0][0]))
@@ -199,105 +161,11 @@ class check_stochasticity(parent_attack):
                         labels_list.append(predicted_label)
                         
                     #Check every element is equivalent to the most recent prediction
-                    assert np.all(logits_list == np.asarray(predicted_logits)), "***Some of the logits are changing stochastically!***"
-                    assert np.all(labels_list == np.asarray(predicted_label)), "***Some of the labels are changing stochastically!***"
+                    assert np.all(logits_list == np.asarray(predicted_logits)), "***Some of the logits are changing stochastically***"
+                    assert np.all(labels_list == np.asarray(predicted_label)), "***Some of the labels are changing stochastically***"
 
                     print("No stochastic elements identified")
                     
-
-# class transfer_attack(parent_attack):
-#     #Overwrite parent constructor for three additional attributes:
-#     # model_under_attack is the model architecture that the transfer attack is being applied to
-#     # model_adversarial_gen and attack_type_dir is the model and attack-type that were used to actually generate the adversarial examples
-#     # distance_range determines if an upper and/or lower bound on the distance of the adversaries will be set before conducting the transfer attack;
-#     # note that for this, the distance metric will have been defined when the adversary_distances array was first made
-#     def __init__(self, attack_dic, 
-#                     return_distance_image=0,
-#                     criterion=foolbox.criteria.Misclassification(), 
-#                     model_under_attack=None,
-#                     model_adversarial_gen=None,
-#                     attack_type_dir=None,
-#                     transfer_distance_metric=None):
-#             parent_attack.__init__(self, attack_dic, 
-#                     return_distance_image,
-#                     criterion)
-#             self.model_under_attack = model_under_attack
-#             self.model_adversarial_gen = model_adversarial_gen
-#             self.attack_type_dir = attack_type_dir
-#             self.transfer_distance_metric = transfer_distance_metric
-
-
-#     def evaluate_resistance(self):
-
-#         logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
-#         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
-
-#         with tf.Session() as session:
-        
-#             saver.restore(session, self.model_weights)
-#             fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
-        
-#             #Iterate through all the models that are not of the kind being attacked
-#             rootdir = 'adversarial_images/transfer_images/'
-#             _, model_dirs, _ = next(os.walk(rootdir))
-#             for key in model_dirs:
-#                 if not key.endswith(self.model_under_attack):
-#                     print(key)
-
-#             #Iterate through all the attack types of a given distance metric
-
-
-#             print("\nPerforming " + self.transfer_distance_metric + " transfer attack with " + self.attack_type_dir + 
-#                 " attack examples generated on a " + self.model_adversarial_gen + " model")
-#             print("Evaluating " + str(self.num_attack_examples) + " adversarial example(s)")
-
-#             assert self.model_adversarial_gen != self.model_under_attack, "*** Trying to use transfer attack with the model's own adversaries ***"
-
-#             #Arrays for storing results of the evaluation
-#             adversary_found, adversary_distance = []
-#             adversary_distance = [] 
-
-#             #Note that attack_type_dir now determines the type of adversarial examples (i.e. how they were generated) that shoulbe *loaded*
-#             transfer_images_file = ('adversarial_images/transfer_images/' + self.model_adversarial_gen + '/' + 
-#                 self.attack_type_dir + '/adversaries_array.npy')
-#             ground_truth_file = ('adversarial_images/transfer_images/' + self.model_adversarial_gen + '/' + 
-#                 self.attack_type_dir + '/ground_truth_labels.csv')
-#             distances_file = ('adversarial_images/transfer_images/' + self.model_adversarial_gen + '/' + 
-#                 self.attack_type_dir + '/adversary_distances.csv')
-
-#             #Load transfer_attack_images and reshape
-#             transfer_images = np.load(transfer_images_file, mmap_mode='r')
-#             transfer_images = np.reshape(transfer_images, [transfer_images.shape[0], 28, 28, 1])
-#             image_distances = np.genfromtxt(distances_file, delimiter=',')
-
-#             ground_truth_labels = np.genfromtxt(ground_truth_file, delimiter=',')
-
-#             #Check that the attack isn't trying to be performed on more images than are available
-#             assert self.num_attack_examples <= transfer_images.shape[0], "*** Requested attack with more examples than are available in transfer attack dataset ***"
-
-#             for example_iter in range(self.num_attack_examples):
-
-#                 execution_data = transfer_images[example_iter, :, :, :]
-#                 execution_data = execution_data #np.expand_dims(execution_data, axis=0) #Reshape for 'forward' method used later
-#                 execution_label = ground_truth_labels[example_iter]
-
-#                 adver_pred = fmodel.forward(execution_data)
-
-#                 if np.argmax(adver_pred) == execution_label:
-#                     print("The model correctly predicted the ground truth label of " + str(execution_label))
-#                     adversary_found.append(0)
-
-#                 else:
-#                     print("The classification label following attack is " + str(np.argmax(adver_pred)) + " from a ground-truth classification of " + str(execution_label))
-#                     adversary_found.append(1)
-#                     #Take absolute value of image_distance to account for images that didn't actually fool the original model, and are hence stored negative
-#                     adversary_distance.append(abs(image_distances[example_iter]))
-            
-#             adversary_found = np.asarray(adversary_found)
-            
-#             return adversary_found, adversary_distance
-
-
 
 #*** L-0 Distance Attacks ***
 
@@ -313,7 +181,7 @@ class pointwise_attack_L0(parent_attack):
         return distance, distance_name
 
 class salt_pepper_attack(pointwise_attack_L0):
-    #Inherit the attributes of the pointwise_attack_L0 class, then overwrite the attack method and summary distance metric
+    #Inherit the attributes of the pointwise_attack_L0 class, then overwrite the attack method
     attack_method = foolbox.attacks.SaltAndPepperNoiseAttack
     attack_type_dir = 'Salt_and_Pepper'
 
@@ -332,7 +200,6 @@ class FGSM_attack(parent_attack):
         return distance, distance_name
 
 class BIM_Linfinity_attack(FGSM_attack):
-    #Inherit the attributes of the FGSM_attack class, then overwrite the attack method and summary distance metric
     attack_method = foolbox.attacks.LinfinityBasicIterativeAttack
     attack_type_dir = 'BIM_LInf'
 
@@ -386,8 +253,7 @@ class spatial_attack(parent_attack):
     attack_type_dir = 'Spatial'
 
 class boundary_attack(parent_attack):
-    #Overwite parent constructor for two additional attributes : num_iterations and log_every_n_steps
-    #As it is overwritten, it needs to be explicitly called here
+    #Overwrite parent constructor for two additional attributes : num_iterations and log_every_n_steps
     def __init__(self, attack_dic,
                     criterion=foolbox.criteria.Misclassification(), 
                     num_iterations=50,
@@ -400,7 +266,7 @@ class boundary_attack(parent_attack):
     attack_method = foolbox.attacks.BoundaryAttack
     attack_type_dir = 'Boundary'
 
-    #Overwrite the execute attack method, as the boundary attack requires a specified number of iterations
+    #Overwrite the execute attack method, as the boundary attack takes a specified number of iterations
     def create_adversarial(self, execution_data, execution_label):
 
             adversarial_images = self.attack_fmodel(execution_data, execution_label, iterations=self.num_iterations, 
