@@ -13,14 +13,10 @@ from PIL import Image
 import os
 import tfCore_adversarial_attacks as atk
 
-
-# #Temporarily disable deprecation warnings (using tf 1.14)
-# tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+# Disable unecessary logging
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' 
 
-
 def data_setup(params):
-    #Note the shape of the images required by the custom CNNs is 2D, rather than flattened as for the Madry model
     if params['dataset'] == 'mnist':
         (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
         training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
@@ -34,7 +30,6 @@ def data_setup(params):
     elif params['dataset'] == 'cifar10':
         (training_data, training_labels), (testing_data, testing_labels) = cifar10.load_data()
     
-    #Rescale images to values between 0:1 and reshape so each image is 28x28
     training_data = training_data/255
     testing_data = testing_data/255
 
@@ -47,7 +42,6 @@ def data_setup(params):
         crossval_labels = training_labels[-10000:]
         training_data = training_data[0:-10000]
         training_labels = training_labels[0:-10000]
-
     else:
         crossval_data = None
         crossval_labels = None
@@ -58,7 +52,7 @@ def data_setup(params):
 def var_summaries(variable):
     with tf.name_scope('Summaries'):
         mean = tf.reduce_mean(variable)
-        tf.compat.v1.summary.scalar('Mean', mean) #The tf.summary operation determines which graph node you would like to annotate, and scalar or histogram the type of summary
+        tf.compat.v1.summary.scalar('Mean', mean)
 
         with tf.name_scope('STD'):
             std = tf.sqrt(tf.reduce_mean(tf.square(variable - mean)))
@@ -73,16 +67,14 @@ def initializer_fun(params, training_data, training_labels):
     tf.compat.v1.reset_default_graph() #Re-set the default graph to clear previous e.g. variable assignments
 
     dropout_rate_placeholder = tf.compat.v1.placeholder(tf.float32)
-    initializer = tf.contrib.layers.variance_scaling_initializer()
+    initializer = tf.contrib.layers.variance_scaling_initializer() #He-initialization
     y = tf.compat.v1.placeholder(training_labels.dtype, [None, 10], name='y-input')
 
-    if (params['dataset'] == 'mnist') or (params['dataset'] == 'fashion_mnist'): #Define core variables for a LeNet-5 architecture for MNIST/Fashion
+    if (params['dataset'] == 'mnist') or (params['dataset'] == 'fashion_mnist'): #Define core variables for a LeNet-5 architecture for MNIST/FashionMNIST
 
         x = tf.compat.v1.placeholder(training_data.dtype, [None, 28, 28, 1], name='x-input')
         
         with tf.compat.v1.variable_scope(params['architecture']):
-        #Note for example that the first convolutional weights layer has a 5x5 filter with 1 input channel, and 6 output channels
-        #tf.compat.v1.get_variable will either get an existing variable with these parameters, or otherwise create a new one
             weights = {
             'conv_W1' : tf.compat.v1.get_variable('CW1', shape=(5, 5, 1, 6), initializer=initializer),
             'conv_W2' : tf.compat.v1.get_variable('CW2', shape=(5, 5, 6, 16), initializer=initializer),
@@ -94,7 +86,7 @@ def initializer_fun(params, training_data, training_labels):
                 weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(1600, 120), initializer=initializer)
                 weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(1176, 120), initializer=initializer)
 
-            #Add summaries for each weightseight variable in the dictionary, for later use in TensorBoard
+            #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
             for weights_var in weights.values():
                 var_summaries(weights_var)
 
@@ -117,13 +109,11 @@ def initializer_fun(params, training_data, training_labels):
                 var_list.append(weights['course_bindingW1'])
                 var_list.append(weights['finegrained_bindingW1'])
 
-    if (params['dataset'] == 'cifar10'): #Define core variables for a VGG architecture for CIFAR-10
+    if (params['dataset'] == 'cifar10'): #Define core variables for a VGG-like architecture for CIFAR-10
 
         x = tf.compat.v1.placeholder(training_data.dtype, [None, 32, 32, 3], name='x-input')
 
         with tf.compat.v1.variable_scope(params['architecture']):
-        #Note for example that the first convolutional weights layer has a 5x5 filter with 1 input channel, and 6 output channels
-        #tf.compat.v1.get_variable will either get an existing variable with these parameters, or otherwise create a new one
             weights = {
             'conv_W1' : tf.compat.v1.get_variable('CW1', shape=(3, 3, 3, 32), initializer=initializer),
             'conv_W2' : tf.compat.v1.get_variable('CW2', shape=(3, 3, 32, 32), initializer=initializer),
@@ -141,7 +131,6 @@ def initializer_fun(params, training_data, training_labels):
                 weights['course_bindingW2'] = tf.compat.v1.get_variable('courseW2', shape=(8*8*128, 120), initializer=initializer)
                 weights['finegrained_bindingW2'] = tf.compat.v1.get_variable('fineW2', shape=(8*8*64, 120), initializer=initializer)
 
-            #Add summaries for each weightseight variable in the dictionary, for later use in TensorBoard
             for weights_var in weights.values():
                 var_summaries(weights_var)
 
@@ -179,7 +168,7 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynam
     print("Building standard LeNet CNN")
 
     sparsity_dic = {} #Store the sparsity of layer activations for later analysis
-    pool1_drop, _, sparsity_dic = conv1_sequence(features, dropout_rate_placeholder, weights, biases, sparsity_dic)
+    pool1_drop, sparsity_dic = conv1_sequence(features, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
     pool2_drop, _, _, sparsity_dic = conv2_sequence(pool1_drop, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
@@ -189,6 +178,7 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynam
 
     logits, sparsity_dic, dense2_drop = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
+    #Any L1 activation regularization used on the standard LeNet-5 applies to the fully-connected layer
     l1_reg_activations1 = tf.norm(dense2_drop, ord=1, axis=None)
     l1_reg_activations2 = 0
 
@@ -199,13 +189,13 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases, 
     print("Building Binding CNN")
 
     sparsity_dic = {}
-    pool1_drop, pool1_indices, sparsity_dic = conv1_sequence(features, dropout_rate_placeholder, weights, biases, sparsity_dic)
+    pool1_drop, sparsity_dic = conv1_sequence(features, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
     pool2_drop, pool2_indices, relu2, sparsity_dic = conv2_sequence(pool1_drop, dropout_rate_placeholder, weights, biases, sparsity_dic)
     pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 16])
 
     #Operations distinct from other networks:
-    #'Course' unpooling binding information
+    #'Course' binding information from unpooling
     unpool_binding_activations, sparsity_dic = unpooling_sequence(pool_drop=pool2_drop, 
         pool_indices=pool2_indices, relu=relu2, relu_flat_shape=[-1, 10 * 10 * 16], 
         dropout_rate_placeholder=dropout_rate_placeholder, sparsity_dic=sparsity_dic)
@@ -233,10 +223,11 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases, 
         tf.matmul(gradient_unpool_binding_activations, weights['finegrained_bindingW1'])),
         biases['dense_b1'])
 
+    logits, sparsity_dic, _ = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
+
+    #No L1 activation regularization is used for the binding model
     l1_reg_activations1 = 0
     l1_reg_activations2 = 0
-
-    logits, sparsity_dic, _ = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
     return logits, sparsity_dic, l1_reg_activations1, l1_reg_activations2
 
@@ -246,9 +237,9 @@ def controlCNN_predictions(features, dropout_rate_placeholder, weights, biases, 
     print("Building control-version of Binding CNN")
 
     sparsity_dic = {}
-    pool1_drop, pool1_indices, sparsity_dic = conv1_sequence(features, dropout_rate_placeholder, weights, biases, sparsity_dic)
+    pool1_drop, sparsity_dic = conv1_sequence(features, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
-    pool2_drop, pool2_indices, relu2, sparsity_dic = conv2_sequence(pool1_drop, dropout_rate_placeholder, weights, biases, sparsity_dic)
+    pool2_drop, _, relu2, sparsity_dic = conv2_sequence(pool1_drop, dropout_rate_placeholder, weights, biases, sparsity_dic)
     pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 16])
 
     #Operations distinct from other networks:
@@ -280,7 +271,7 @@ def VGG_predictions(features, dropout_rate_placeholder, weights, biases, dynamic
 
     print("Building standard VGG CNN")
 
-    sparsity_dic = {} #Store the sparsity of layer activations for later analysis
+    sparsity_dic = {} 
     
     #First VGG block
     pool1_drop, _, _, _, sparsity_dic = VGG_conv_sequence(inputs=tf.dtypes.cast(features, dtype=tf.float32), dropout_rate_placeholder=dropout_rate_placeholder, 
@@ -312,9 +303,9 @@ def VGG_predictions(features, dropout_rate_placeholder, weights, biases, dynamic
 
 def BindingVGG_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_var):
 
-    print("Building a binding VGG-like CNN")
+    print("Building a Binding VGG-like CNN")
 
-    sparsity_dic = {} #Store the sparsity of layer activations for later analysis
+    sparsity_dic = {}
     
     #First VGG block
     pool1_drop, pool1_indices, relu1B, _, sparsity_dic = VGG_conv_sequence(inputs=tf.dtypes.cast(features, dtype=tf.float32), dropout_rate_placeholder=dropout_rate_placeholder, 
@@ -331,7 +322,7 @@ def BindingVGG_predictions(features, dropout_rate_placeholder, weights, biases, 
         dropout_rate_placeholder=dropout_rate_placeholder, sparsity_dic=sparsity_dic)
 
     #Third VGG block
-    pool3_drop, pool3_indices, relu3B, relu3A, sparsity_dic = VGG_conv_sequence(inputs=pool2_drop, dropout_rate_placeholder=dropout_rate_placeholder, 
+    pool3_drop, pool3_indices, relu3B, _, sparsity_dic = VGG_conv_sequence(inputs=pool2_drop, dropout_rate_placeholder=dropout_rate_placeholder, 
         conv_weights=[weights['conv_W5'], weights['conv_W6']], conv_biases=[biases['conv_b5'], biases['conv_b6']], 
         sparsity_dic=sparsity_dic, VGG_block=3)
 
@@ -384,12 +375,12 @@ def gradient_unpooling_sequence(high_level, low_level, low_flat_shape, dropout_r
     binding_grad_flat = tf.reshape(binding_grad, low_flat_shape)
 
     #Use k-th largest value as a threshold for getting a boolean mask
-    #K is roughly selected for 85% sparsity
+    #K is selected for approx top 15% gradients
     values, _ = tf.math.top_k(binding_grad_flat, k=round(low_flat_shape[1]*0.15))
     kth = tf.reduce_min(values, axis=1)
     mask = tf.greater_equal(binding_grad_flat, tf.expand_dims(kth, -1))
     low_level_flat = tf.reshape(low_level, low_flat_shape) 
-    gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise to just the pool1 activations (i.e. not including conv2 transformation)
+    gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise
 
     sparsity_dic['gradient_unpool_sparsity'] = tf.math.zero_fraction(gradient_unpool_binding_activations)
 
@@ -403,10 +394,10 @@ def conv1_sequence(features, dropout_rate_placeholder, weights, biases, sparsity
     conv1_drop = tf.nn.dropout(conv1, rate=dropout_rate_placeholder)
     relu1 = tf.nn.relu(conv1_drop)
     sparsity_dic['relu1_sparsity'] = tf.math.zero_fraction(relu1)
-    pool1, pool1_indices = tf.nn.max_pool_with_argmax(relu1, ksize=(1,2,2,1), strides=(1,2,2,1), padding="VALID")
+    pool1, _ = tf.nn.max_pool_with_argmax(relu1, ksize=(1,2,2,1), strides=(1,2,2,1), padding="VALID")
     pool1_drop = tf.nn.dropout(pool1, rate=dropout_rate_placeholder)
 
-    return pool1_drop, pool1_indices, sparsity_dic
+    return pool1_drop, sparsity_dic
 
 def conv2_sequence(pool1_drop, dropout_rate_placeholder, weights, biases, sparsity_dic):
 
@@ -539,7 +530,7 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
         correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-        total_accuracy = tf.reduce_sum(tf.cast(correct_prediction, tf.float32)) #Used to store batched accuracy for evaluating the test dataset
+        total_accuracy = tf.reduce_sum(tf.cast(correct_prediction, tf.float32)) #Used to store batched accuracy for evaluating on the entire test dataset
         
         tf.compat.v1.summary.scalar('Accuracy', accuracy)
         accuracy_summary = tf.compat.v1.summary.scalar(name="Accuracy_values", tensor=accuracy)
@@ -553,20 +544,13 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
     #Create a Saver object to enable later re-loading of the learned weights
     saver = tf.compat.v1.train.Saver(var_list)
 
-    #Merge and provide directory for saving TF summaries
+    #Merge TF summaries
     merged = tf.compat.v1.summary.merge_all()
 
-
-    #If using the cifar10 dataset, apply data-augmentation
-    if params['dataset'] == 'cifar10':
-        width_shift_range=0.1
-        height_shift_range=0.1
-        horizontal_flip=True
-        print("\nApplying data augmentation\n")
-    else:
-        width_shift_range=0.0
-        height_shift_range=0.0
-        horizontal_flip=False
+    def train_batch(batch_x, batch_y, dropout_rate):
+        run_optim = sess.run(optimizer, feed_dict = {x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : dropout_rate})
+        loss, acc = sess.run([cost, accuracy], feed_dict = {x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : 0.0})
+        return loss, acc
 
     with tf.compat.v1.Session() as sess:
 
@@ -574,10 +558,8 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
         #initializers from being re-run when e.g. relaoding a model from a checkpoint
         sess.run(tf.compat.v1.global_variables_initializer())
 
-
         # #Run de-bugger
         # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-        # sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
 
         network_name_str = str(iter_num) + params['architecture'] + '_adver_trained_' + str(params['adver_trained'])
         print("\n\nTraining " + network_name_str)
@@ -585,20 +567,27 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
         testing_writer = tf.compat.v1.summary.FileWriter('tensorboard_data/tb_' + network_name_str + '/testing')
 
         for epoch in range(params['training_epochs']):
+            if params['dataset'] == 'cifar10':
+                #Use data augmentation
+                batches=0
+                datagen = ImageDataGenerator(width_shift_range=0.1, height_shift_range=0.1, horizontal_flip=True)
+                for batch_x, batch_y in datagen.flow(training_data, training_labels, batch_size=params['batch_size']):
+                    batches += 1
+                    if batches >= len(training_labels)/params['batch_size']:
+                        break
 
-            batches=0
-            #Perform data augmentation with small translations and horizontal flipping
-            datagen = ImageDataGenerator(width_shift_range=width_shift_range, height_shift_range=height_shift_range, horizontal_flip=horizontal_flip)
-            for batch_x, batch_y in datagen.flow(training_data, training_labels, batch_size=params['batch_size']):
-                batches += 1
-                if batches >= len(training_labels)/params['batch_size']:
-                    break
+                    loss, acc = train_batch(batch_x, batch_y, params['dropout_rate'])
+            else:
+                #Shuffle the training data
+                rand_idx = np.random.permutation(len(training_labels))
+                shuffled_training_data = training_data[rand_idx]
+                shuffled_training_labels = training_labels[rand_idx]
 
-                #Recall that tf.Session.run is the main method for running a tf.Operation or evaluation a tf.Tensor
-                #By passing or more Tensors or Operations, TensorFlow will execute the operations needed
-                run_optim = sess.run(optimizer, feed_dict = {x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : params['dropout_rate']})
+                for training_batch in range(math.ceil(len(training_labels)/params['batch_size'])):
+                    batch_x = shuffled_training_data[training_batch*params['batch_size']:min((training_batch+1)*params['batch_size'], len(training_labels))]
+                    batch_y = shuffled_training_labels[training_batch*params['batch_size']:min((training_batch+1)*params['batch_size'], len(training_labels))]
 
-                loss, acc = sess.run([cost, accuracy], feed_dict = {x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : 0.0})
+                    loss, acc = train_batch(batch_x, batch_y, params['dropout_rate'])
 
             training_summ, training_acc = sess.run([merged, accuracy], feed_dict={x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : 0.0})
             training_writer.add_summary(training_summ, epoch)
@@ -641,7 +630,7 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
         training_writer.close()
         testing_writer.close()
 
-        return training_acc , testing_acc, network_name_str, testing_sparsity
+        return training_acc, testing_acc, network_name_str, testing_sparsity
 
 
 if __name__ == '__main__':
@@ -650,7 +639,7 @@ if __name__ == '__main__':
     'dynamic_var':'None',
     'dataset':'mnist',
     'meta_architecture':'CNN',
-    'training_epochs':30,
+    'training_epochs':60,
     'adver_trained':False,
     'crossval_bool':False,
     'dropout_rate':0.25,
