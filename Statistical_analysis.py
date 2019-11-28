@@ -7,6 +7,8 @@ import researchpy as rp
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
+from statsmodels.stats.multicomp import MultiComparison
 
 #The code can be used to perform ANOVA and post-hoc analysis of data
 
@@ -304,28 +306,39 @@ Madry_results_dic = {
     ]
 }
 
-
-combined_results_dic = {'BindingCNN':[],
-    'LeNet':[],
-    'Madry':[]}
+combined_results_dic = {'Model':[],
+    'Distance':[]}
 
 for key in Binding_results_dic:
-	combined_results_dic['BindingCNN'].append((Binding_results_dic[key])[3])
+    combined_results_dic['Model'].append('BindingCNN')
+    combined_results_dic['Distance'].append((Binding_results_dic[key])[3])
 for key in LeNet_results_dic:
-    combined_results_dic['LeNet'].append((LeNet_results_dic[key])[3])
+    combined_results_dic['Model'].append('LeNet')
+    combined_results_dic['Distance'].append((LeNet_results_dic[key])[3])
 for key in Madry_results_dic:
-    combined_results_dic['Madry'].append((Madry_results_dic[key])[1])
+    combined_results_dic['Model'].append('Madry')
+    combined_results_dic['Distance'].append((Madry_results_dic[key])[1])
 
 
-print(combined_results_dic)
+#print(combined_results_dic)
 
 results_df = pd.DataFrame(combined_results_dic, 
-	columns = ['BindingCNN', 'LeNet', 'Madry'])
+    columns = ['Model', 'Distance'])
 
-print(results_df)
+#print(results_df)
 
-print(rp.summary_cont(results_df))
+print(rp.summary_cont(results_df['Distance'].groupby(results_df['Model'])))
 
-print(stats.f_oneway(results_df['BindingCNN'], 
-             results_df['LeNet'],
-             results_df['Madry']))
+print(stats.f_oneway(results_df['Distance'][results_df['Model']=='BindingCNN'], 
+             results_df['Distance'][results_df['Model']=='LeNet'],
+             results_df['Distance'][results_df['Model']=='Madry']))
+
+results = ols('Distance ~ C(Model)', data=results_df).fit()
+print(results.summary())
+
+aov_table = sm.stats.anova_lm(results, typ=2)
+print(aov_table)
+
+mc = MultiComparison(results_df['Distance'], results_df['Model'])
+mc_results = mc.tukeyhsd(0.001)
+print(mc_results)
