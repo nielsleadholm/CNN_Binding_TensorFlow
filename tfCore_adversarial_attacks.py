@@ -27,7 +27,7 @@ class parent_attack:
             self.dropout_rate_placeholder = attack_dic['dropout_rate_placeholder']
             self.output_directory = attack_dic['output_directory']
             self.num_attack_examples = attack_dic['num_attack_examples']
-            self.dynamic_var = attack_dic['dynamic_var'] #Determines if e.g. a network section is ablated, or noise is added to the logits
+            self.dynamic_dic = attack_dic['dynamic_dic'] #Determines if e.g. a network section is ablated, or noise is added to the logits
             self.batch_size = attack_dic['batch_size']
             self.save_images = attack_dic['save_images']
             self.criterion = criterion #note by default this is simply foolbox's Misclassification criterion
@@ -39,7 +39,7 @@ class parent_attack:
 
     def evaluate_resistance(self):
 
-        logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_var)
+        logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
         self.mk_dir()
 

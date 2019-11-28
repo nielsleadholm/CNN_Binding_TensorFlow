@@ -14,28 +14,39 @@ import CNN_module as CNN
 import Adversarial_training
 
 #Parameters determining the networks that will be trained and evaluated
-#dynamic_var allows for temporary changes to a model's forward pass, such as adding stochasticity or ablating layers
+#dynamic_dic allows for temporary changes to a model's forward pass, such as adding stochasticity or ablating layers; see CNN_module for details
+#Options for dynamic_dic are:
+	# "Add_logit_noise"
+	# "Ablate_unpooling"
+	# "Ablate_gradient_unpooling"
+	# "Ablate_binding"
+	# "Ablate_maxpooling"
+	# "Ablate_max&gradient"
+	# "Ablate_max&unpool"
+#sparsification_kwinner determines the sparsity of gradient unpooling activations (select a value between 0 and 1); note the actual
+# binding activation sparsity may differ (specifically be more sparse) depending on how sparse the activations are before the gradient unpooling operation
+#sparsification_dropout applies a dropout rate to binding layers at all times (i.e. including during testing) to measure the effect of activation sparsity
 #meta_architecture determines whether a standard CNN or e.g. an auto-encoder architecture is to be used
 #adver_trained, if True, will train or load an adversarially trained model
 #L1 regularization has two separate constants:
-	# For a LeNet model, activations1 refers to the penultimate fully-connected layer, and activations2 has no effect
+	# For a LeNet model, activations1 refers to the penultimate fully-connected layer (as in Guo et al), and activations2 has no effect
 	# For a control model, activations1 refers to unpooling, activations2 to gradient unpooling
 	# For any other models, these activations have no regularizing effect
 model_params = {
-	'architecture':'BindingCNN',
-	'dynamic_var':'None',
+	'architecture':'LeNet',
+	'dynamic_dic':{'dynamic_var':'None', 'sparsification_kwinner':0.15, 'sparsification_dropout':0.0},
 	'dataset':'mnist',
     'learning_rate':0.001,
 	'meta_architecture':'CNN',
-	'train_new_network':False,
+	'train_new_network':True,
 	'adver_trained':False,
-	'crossval_bool':False,
+	'crossval_bool':True,
 	'check_stochasticity':False,
-	'num_network_duplicates':1,
-    'training_epochs':30,
+	'num_network_duplicates':5,
+    'training_epochs':45,
     'dropout_rate':0.25,
     'label_smoothing':0.1,
-    'L1_regularization_activations1':0.0,
+    'L1_regularization_activations1':0.0001,
     'L1_regularization_activations2':0.0,
     'batch_size':128
 	}
@@ -43,7 +54,7 @@ model_params = {
 #Parameters determining the adversarial attacks
 #perturbation_threshold defines the threshold of the L-0, L-inf, and L-2 distances at which accuracy is evaluated
 adversarial_params = {
-	'num_attack_examples':50,
+	'num_attack_examples':128,
     'boundary_attack_iterations':1000,
     'boundary_attack_log_steps':1000,
     'perturbation_threshold':[12, 0.3, 1.5],
@@ -96,7 +107,7 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 			all_results_dic.update({network_name_str:{}})
 
 			#Evaluate the accuracy of the loaded model
-			predictions, sparsity_dic, _, _ = getattr(CNN, model_params['architecture'] + '_predictions')(x_placeholder, dropout_rate_placeholder, weights, biases, model_params['dynamic_var'])
+			predictions, sparsity_dic, activation_dic, _ = getattr(CNN, model_params['architecture'] + '_predictions')(x_placeholder, dropout_rate_placeholder, weights, biases, model_params['dynamic_dic'])
 			correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
 			total_accuracy = tf.reduce_sum(tf.cast(correct_prediction, tf.float32)) #Used to store batched accuracy for evaluating the test dataset
 
@@ -108,18 +119,19 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 			with tf.Session() as sess:
 				saver.restore(sess, ("network_weights_data/" + network_name_str + ".ckpt"))
 
-				print("\nRunning mltest for NaN/Inf values on a single batch...")
-				mltest.test_suite(
-					predictions,
-					train_op=dummy_op,
-					feed_dict={x_placeholder: testing_data[0:model_params['batch_size']], 
-						y_placeholder: testing_labels[0:model_params['batch_size']], dropout_rate_placeholder : 0.0}, 
-					var_list=var_list,
-					test_all_inputs_dependent=False,
-					test_output_range=False,
-					test_nan_vals=True,
-					test_inf_vals=True)
-				print("--> passed mltest check.")
+				# print("\nRunning mltest for NaN/Inf values on a single batch...")
+				# mltest.test_suite(
+				# 	predictions,
+				# 	train_op=dummy_op,
+				# 	feed_dict={x_placeholder: testing_data[0:model_params['batch_size']], 
+				# 		y_placeholder: testing_labels[0:model_params['batch_size']], dropout_rate_placeholder : 0.0}, 
+				# 	var_list=var_list,
+				# 	test_all_inputs_dependent=False,
+				# 	test_other_vars_dont_change=False,
+				# 	test_output_range=False,
+				# 	test_nan_vals=True,
+				# 	test_inf_vals=True)
+				# print("--> passed mltest check.")
 
 				#Assess accuracy batch-wise to avoid memory issues in large models
 				accuracy_total = 0 
@@ -145,7 +157,7 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 
 					#Convert values in the dictonary to standard float for .json saving
 					testing_sparsity_float = [dict([key, float(value)] for key, value in testing_sparsity.items())] 
-					
+
 					all_results_dic[network_name_str].update({'testing_sparsity':testing_sparsity_float})
 
 
@@ -165,7 +177,7 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 			stoch_check.perform_check()
 
 		all_results_dic[network_name_str].update(carry_out_attacks(adversarial_params, evaluation_data, evaluation_labels, 
-			x_placeholder, var_list, weights, biases, network_name_str, iter_num, model_params['dynamic_var']))
+			x_placeholder, var_list, weights, biases, network_name_str, iter_num, model_params['dynamic_dic']))
 		print("\n\nThe cumulative results are...\n")
 		print(all_results_dic)
 
@@ -174,7 +186,7 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 
 
 
-def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholder, var_list, weights, biases, network_name_str, iter_num, dynamic_var):
+def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholder, var_list, weights, biases, network_name_str, iter_num, dynamic_dic):
 
 	#Create directory for storing images
 	if os.path.exists('adversarial_images/') == 0:
@@ -191,7 +203,7 @@ def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholde
                 'dropout_rate_placeholder':0.0,
                 'output_directory':network_name_str,
                 'num_attack_examples':adversarial_params['num_attack_examples'],
-                'dynamic_var':dynamic_var,
+                'dynamic_dic':dynamic_dic,
                 'batch_size':model_params['batch_size'],
                 'save_images':adversarial_params['save_images']}
 
@@ -302,15 +314,15 @@ def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholde
 	L2_running_min = np.minimum(L2_running_min, adversary_distance)
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	# attack_name = 'boundary'
-	# boundary = atk.boundary_attack(attack_dic,
- #                num_iterations=adversarial_params['boundary_attack_iterations'],
- #                log_every_n_steps=adversarial_params['boundary_attack_log_steps'])
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = boundary.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
-	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	attack_name = 'boundary'
+	boundary = atk.boundary_attack(attack_dic,
+                num_iterations=adversarial_params['boundary_attack_iterations'],
+                log_every_n_steps=adversarial_params['boundary_attack_log_steps'])
+	adversary_found, adversary_distance, adversaries_array, perturb_list = boundary.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
+	L2_running_min = np.minimum(L2_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
 	print("\nResults across all L2 attacks...")
 	network_dic['all_L2'] = [float(s) for s in analysis(L2_running_min, perturb_list=[], perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
