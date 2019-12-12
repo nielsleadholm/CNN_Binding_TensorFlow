@@ -176,10 +176,10 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynam
     pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 16])
     dense1 = tf.nn.bias_add(tf.matmul(pool2_flat, weights['dense_W1']), biases['dense_b1'])
 
-    logits, sparsity_dic, dense2_drop = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
+    logits, sparsity_dic, dense1_drop = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
 
     #Any L1 activation regularization used on the standard LeNet-5 applies to the fully-connected layer
-    l1_reg_activations1 = tf.norm(dense2_drop, ord=1, axis=None)
+    l1_reg_activations1 = tf.norm(dense1_drop, ord=1, axis=None)
     l1_reg_activations2 = 0
 
     if dynamic_dic['dynamic_var'] == 'Add_logit_noise':
@@ -210,7 +210,9 @@ def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases, 
         low_level=pool1_drop, low_flat_shape=[-1, 14 * 14 * 6], dropout_rate_placeholder=dropout_rate_placeholder, 
         sparsity_dic=sparsity_dic, dynamic_dic=dynamic_dic)
 
-    if dynamic_dic['dynamic_var'] == "Ablate_unpooling":
+    if ((dynamic_dic['dynamic_var'] == "Ablate_unpooling") or 
+        (dynamic_dic['dynamic_var'] == 'kwinner_activations') or
+        (dynamic_dic['dynamic_var'] == 'kloser_gradients')):
         print("Ablating unpooling activations...")
         unpool_binding_activations = tf.zeros(shape=tf.shape(unpool_binding_activations))
     elif dynamic_dic['dynamic_var'] == "Ablate_gradient_unpooling":
@@ -391,13 +393,33 @@ def gradient_unpooling_sequence(high_level, low_level, low_flat_shape, dropout_r
     binding_grad = tf.squeeze(tf.gradients(high_level, low_level, unconnected_gradients=tf.UnconnectedGradients.ZERO), 0) #Squeeze removes the dimension of the gradient tensor that stores dtype
     binding_grad_flat = tf.reshape(binding_grad, low_flat_shape)
 
-    #Use k-th largest value as a threshold for getting a boolean mask
-    #K is selected for approx top 15% gradients
-    values, _ = tf.math.top_k(binding_grad_flat, k=round(low_flat_shape[1]*dynamic_dic['sparsification_kwinner']))
-    kth = tf.reduce_min(values, axis=1)
-    mask = tf.greater_equal(binding_grad_flat, tf.expand_dims(kth, -1))
-    low_level_flat = tf.reshape(low_level, low_flat_shape) 
-    gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise
+    #Rather than using k-largest gradients to apply a mask, simply up-project the k-largest activations
+    if dynamic_dic['dynamic_var'] == 'kwinner_activations':
+        print("Using the k-largest activations rather than k-largest gradients for 'gradient unpooling'.")
+        low_level_flat = tf.reshape(low_level, low_flat_shape) 
+        values, _ = tf.math.top_k(low_level_flat, k=round(low_flat_shape[1]*dynamic_dic['sparsification_kwinner']))
+        kth = tf.reduce_min(values, axis=1)
+        mask = tf.greater_equal(low_level_flat, tf.expand_dims(kth, -1))
+        gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise
+
+    #Rather than using the k-largest gradietns to apply a mask, use the k-smallest gradients; serves as a control for the gradient operation somehow being the trick
+    elif dynamic_dic['dynamic_var'] == 'kloser_gradients':
+        print("Using the k-*smallest* gradients for 'gradient unpooling'.")
+        #Note we use the negative sign to find the 'bottom-k'
+        values, _ = tf.math.top_k(tf.negative(binding_grad_flat), k=round(low_flat_shape[1]*dynamic_dic['sparsification_kwinner']))
+        kth = tf.reduce_max(tf.negative(values), axis=1)
+        mask = tf.less_equal(binding_grad_flat, tf.expand_dims(kth, -1))
+        low_level_flat = tf.reshape(low_level, low_flat_shape) 
+        gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise
+
+    else:
+        #Use k-th largest value as a threshold for getting a boolean mask
+        #K is selected for approx top 15% gradients
+        values, _ = tf.math.top_k(binding_grad_flat, k=round(low_flat_shape[1]*dynamic_dic['sparsification_kwinner']))
+        kth = tf.reduce_min(values, axis=1)
+        mask = tf.greater_equal(binding_grad_flat, tf.expand_dims(kth, -1))
+        low_level_flat = tf.reshape(low_level, low_flat_shape) 
+        gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise
 
     #Apply drop-out to measure the effect of sparsity; note this dropout, if set above 0, is always applied (including during testing)
     gradient_unpool_binding_activations = tf.nn.dropout(gradient_unpool_binding_activations, rate=dynamic_dic['sparsification_dropout'])
@@ -442,7 +464,7 @@ def fc_sequence(dense1, dropout_rate_placeholder, weights, biases, sparsity_dic)
     sparsity_dic['dense2_sparsity'] = tf.math.zero_fraction(dense2_drop)
     logits = tf.nn.bias_add(tf.matmul(dense2_drop, weights['output_W']), biases['output_b'])
 
-    return logits, sparsity_dic, dense2_drop
+    return logits, sparsity_dic, dense1_drop
 
 def VGG_conv_sequence(inputs, dropout_rate_placeholder, conv_weights, conv_biases, sparsity_dic, VGG_block):
 
