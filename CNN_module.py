@@ -67,7 +67,8 @@ def initializer_fun(params, training_data, training_labels):
     tf.compat.v1.reset_default_graph() #Re-set the default graph to clear previous e.g. variable assignments
 
     dropout_rate_placeholder = tf.compat.v1.placeholder(tf.float32)
-    initializer = tf.contrib.layers.variance_scaling_initializer() #He-initialization
+    #He-initialization; note the 'Delving Deep into Rectifiers' used a value of 2.0
+    initializer = tf.contrib.layers.variance_scaling_initializer(factor=2.0*params['He_modifier'])
     y = tf.compat.v1.placeholder(training_labels.dtype, [None, 10], name='y-input')
 
     if (params['dataset'] == 'mnist') or (params['dataset'] == 'fashion_mnist'): #Define core variables for a LeNet-5 architecture for MNIST/FashionMNIST
@@ -639,7 +640,7 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
             if params['dataset'] == 'cifar10':
                 #Use data augmentation
                 batches=0
-                datagen = ImageDataGenerator(width_shift_range=0.1, height_shift_range=0.1, horizontal_flip=True)
+                datagen = ImageDataGenerator(width_shift_range=params['shift_range'], height_shift_range=params['shift_range'], horizontal_flip=True)
                 for batch_x, batch_y in datagen.flow(training_data, training_labels, batch_size=params['batch_size']):
                     batches += 1
                     if batches >= len(training_labels)/params['batch_size']:
