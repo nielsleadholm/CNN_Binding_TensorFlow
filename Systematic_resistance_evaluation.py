@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import mltest
 import math
 import time
+import foolbox
 from PIL import Image
 import CNN_module as CNN
 import Adversarial_training
@@ -31,8 +32,9 @@ import Adversarial_training
 #sparsification_kwinner determines the sparsity of gradient unpooling activations (select a value between 0 and 1); note the actual
 # binding activation sparsity may differ (specifically be more sparse) depending on how sparse the activations are before the gradient unpooling operation
 #sparsification_dropout applies a dropout rate to binding layers at all times (i.e. including during testing) to measure the effect of activation sparsity
-#meta_architecture determines whether a standard CNN or e.g. an auto-encoder architecture is to be used
+#meta_architecture determines whether a standard CNN or e.g. an auto-encoder ('SAE') architecture is to be used
 #adver_trained, if True, will train or load an adversarially trained model
+#predictive weighting - scales how important supervised prediction is vs. unsupervised reconstruction in the SAE cost function
 #He_modifier: multiplicative factor by which the initialized weights are scaled; note the scalar value selected here is multiplied
 # by 2.0 (the value used in the original publication) before scaling the weights; therefore use 1.0 for default
 #shift_range determines shifting used in CIFAR-10 data-augmentationl; for a typical value, use 0.1
@@ -41,21 +43,22 @@ import Adversarial_training
 	# For a control model, activations1 refers to unpooling, activations2 to gradient unpooling
 	# For any other models, these activations have no regularizing effect
 model_params = {
-	'architecture':'LeNet',
+	'architecture':'BindingCNN',
 	'dynamic_dic':{'dynamic_var':'None', 'analysis_var':'None', 'sparsification_kwinner':0.1, 'sparsification_dropout':0.0},
 	'dataset':'mnist',
     'learning_rate':0.001,
-	'meta_architecture':'CNN',
-	'train_new_network':False,
+	'meta_architecture':'SAE',
+	'train_new_network':True,
 	'adver_trained':False,
 	'crossval_bool':True,
 	'check_stochasticity':False,
-	'num_network_duplicates':1,
-    'training_epochs':45,
+	'num_network_duplicates':3,
+    'training_epochs':150,
     'dropout_rate':0.25,
+    'predictive_weighting':0.01,
     'He_modifier':1.0,
     'shift_range':0.1,
-    'label_smoothing':0.0,
+    'label_smoothing':0.1,
     'L1_regularization_activations1':0.0,
     'L1_regularization_activations2':0.0,
     'batch_size':128
@@ -64,9 +67,9 @@ model_params = {
 #Parameters determining the adversarial attacks
 #perturbation_threshold defines the threshold of the L-0, L-inf, and L-2 distances at which accuracy is evaluated
 adversarial_params = {
-	'num_attack_examples':32,
+	'num_attack_examples':128,
 	'estimate_gradients':False,
-    'boundary_attack_iterations':1000,
+    'boundary_attack_iterations':200,
     'boundary_attack_log_steps':1000,
     'perturbation_threshold':[12, 0.3, 1.5],
     'save_images':False
@@ -112,12 +115,12 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 			all_results_dic[network_name_str].update({'testing_accuracy':float(eval_accuracy)})
 		
 		#Note Adversarial_training uses it's own initializer
-		x_placeholder, y_placeholder, dropout_rate_placeholder, var_list, weights, biases = CNN.initializer_fun(model_params, training_data, training_labels)
+		x_placeholder, y_placeholder, dropout_rate_placeholder, var_list, weights, biases, decoder_weights = CNN.initializer_fun(model_params, training_data, training_labels)
 
 		if (model_params['train_new_network'] == True) and (model_params['adver_trained'] == False):
 			print("\nUsing standard (non-adversarial) training...")
 			training_accuracy, eval_accuracy, network_name_str, eval_sparsity = CNN.network_train(model_params, iter_num, var_list, training_data, 
-				training_labels, evaluation_data, evaluation_labels, weights, biases, x_placeholder=x_placeholder, 
+				training_labels, evaluation_data, evaluation_labels, weights, biases, decoder_weights, x_placeholder=x_placeholder, 
 			    y_placeholder=y_placeholder, dropout_rate_placeholder=dropout_rate_placeholder)
 
 			all_results_dic.update({network_name_str:{}})
@@ -314,7 +317,7 @@ def transfer_attack_setup(adversarial_params, evaluation_data, evaluation_labels
 		}
 
 	(surrogate_x_placeholder, surrogate_y_placeholder, surrogate_dropout_rate_placeholder, 
-		surrogate_var_list, surrogate_weights, surrogate_biases) = CNN.initializer_fun(surrogate_params, training_data, training_labels)
+		surrogate_var_list, surrogate_weights, surrogate_biases, surrogate_decoder_weights) = CNN.initializer_fun(surrogate_params, training_data, training_labels)
 
 	surrogate_dic = {'model_prediction_function':getattr(CNN, surrogate_params['architecture'] + '_predictions'),
         'model_weights':("surrogate_weights_data/Surrogate.ckpt"),
@@ -403,76 +406,87 @@ def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholde
 	LInf_running_min = [] #Keep track of the minimum adversarial perturbation required for each image
 	L2_running_min = [] #Keep track of the minimum adversarial perturbation required for each image
 
-	# print("\n\n***Performing L-0 Distance Attacks***\n")
+	print("\n\n***Performing L-0 Distance Attacks***\n")
 
-	# attack_name = 'pointwise_L0'
-	# pointwise_L0 = atk.pointwise_attack_L0(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = pointwise_L0.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][0])]
-	# L0_running_min = adversary_distance
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	attack_name = 'pointwise_L0'
+	pointwise_L0 = atk.pointwise_attack_L0(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = pointwise_L0.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][0])]
+	L0_running_min = adversary_distance
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	# attack_name = 'salt'
-	# salt = atk.salt_pepper_attack(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = salt.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][0])]
-	# L0_running_min = np.minimum(L0_running_min, adversary_distance) #Take element-wise minimum
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	attack_name = 'salt'
+	salt = atk.salt_pepper_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = salt.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][0])]
+	L0_running_min = np.minimum(L0_running_min, adversary_distance) #Take element-wise minimum
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	# print("\nResults across all L0 attacks...")
-	# network_dic['all_L0'] = [float(s) for s in analysis(L0_running_min, perturb_list=[], perturbation_threshold=adversarial_params['perturbation_threshold'][0])]
+	print("\nResults across all L0 attacks...")
+	network_dic['all_L0'] = [float(s) for s in analysis(L0_running_min, perturb_list=[], perturbation_threshold=adversarial_params['perturbation_threshold'][0])]
 
-	# print("\n\n***Performing L-Inf Distance Attacks***\n")
+	print("\n\n***Performing L-Inf Distance Attacks***\n")
 
-	# attack_name = 'FGSM'
-	# FGSM = atk.FGSM_attack(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = FGSM.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
-	# LInf_running_min = adversary_distance
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	attack_name = 'FGSM'
+	FGSM = atk.FGSM_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = FGSM.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
+	LInf_running_min = adversary_distance
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 	
-	# #LInf transfer attack
-	# FGSM_adversaries_array = np.load('transfer_images/FGSM.npy') #Load starting adversaries created against a surrogate CNN model
-	# BIM_LInf_adversaries_array = np.load('transfer_images/BIM_LInf.npy')
-	# starting_adversaries = np.asarray((FGSM_adversaries_array, BIM_LInf_adversaries_array))
-	# attack_name = 'transfer_LInf'
-	# transferLInf = atk.transfer_attack_LInf(attack_dic, starting_adversaries)
-	# adversary_distance = transferLInf.evaluate_resistance()
-	# perturb_list = []
+	#LInf transfer attack
+	FGSM_adversaries_array = np.load('transfer_images/FGSM.npy') #Load starting adversaries created against a surrogate CNN model
+	BIM_LInf_adversaries_array = np.load('transfer_images/BIM_LInf.npy')
+	starting_adversaries = np.asarray((FGSM_adversaries_array, BIM_LInf_adversaries_array))
+	attack_name = 'transfer_LInf'
+	transferLInf = atk.transfer_attack_LInf(attack_dic, starting_adversaries)
+	adversary_distance = transferLInf.evaluate_resistance()
+	perturb_list = []
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+			perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
+	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+	attack_name = 'BIM_LInf'
+	BIM_LInf = atk.BIM_Linfinity_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = BIM_LInf.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
+	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+	attack_name = 'DeepFool_LInf'
+	DeepFool_LInf = atk.DeepFool_LInf_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = DeepFool_LInf.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
+	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	
+	attack_name = 'MIM'
+	MIM = atk.MIM_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = MIM.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
+	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	
+	# attack_name = 'hop_skip_LInf'
+	# hop_skip_LInf = atk.hop_skip_attack_LInf(attack_dic,
+ #                num_iterations=adversarial_params['boundary_attack_iterations'],
+ #                log_every_n_steps=adversarial_params['boundary_attack_log_steps'])
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = hop_skip_LInf.evaluate_resistance()
 	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 		perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
+	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
 	# LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
 	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	# attack_name = 'BIM_LInf'
-	# BIM_LInf = atk.BIM_Linfinity_attack(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = BIM_LInf.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
-	# LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	# attack_name = 'DeepFool_LInf'
-	# DeepFool_LInf = atk.DeepFool_LInf_attack(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = DeepFool_LInf.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
-	# LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
-	
-	# attack_name = 'MIM'
-	# MIM = atk.MIM_attack(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = MIM.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
-	# LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
-	
-	# print("\nResults across all LInf attacks...")
-	# network_dic['all_LInf'] = [float(s) for s in analysis(LInf_running_min, perturb_list=[], perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
+	print("\nResults across all LInf attacks...")
+	network_dic['all_LInf'] = [float(s) for s in analysis(LInf_running_min, perturb_list=[], perturbation_threshold=adversarial_params['perturbation_threshold'][1])]
 
 
 	print("\n\n***Performing L-2 Distance Attacks***\n")
@@ -485,46 +499,54 @@ def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholde
 	L2_running_min = adversary_distance
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 	
-	# #L2 transfer attack
-	# FGM_adversaries_array = np.load('transfer_images/FGM.npy') #Load starting adversaries created against a surrogate CNN model
-	# BIML2_adversaries_array = np.load('transfer_images/BIM_L2.npy')
-	# starting_adversaries = np.asarray((FGM_adversaries_array, BIML2_adversaries_array))
-	# attack_name = 'transfer_L2'
-	# transferL2 = atk.transfer_attack_L2(attack_dic, starting_adversaries)
-	# adversary_distance = transferL2.evaluate_resistance()
-	# perturb_list = []
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 		perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
-	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	#L2 transfer attack
+	FGM_adversaries_array = np.load('transfer_images/FGM.npy') #Load starting adversaries created against a surrogate CNN model
+	BIML2_adversaries_array = np.load('transfer_images/BIM_L2.npy')
+	starting_adversaries = np.asarray((FGM_adversaries_array, BIML2_adversaries_array))
+	attack_name = 'transfer_L2'
+	transferL2 = atk.transfer_attack_L2(attack_dic, starting_adversaries)
+	adversary_distance = transferL2.evaluate_resistance()
+	perturb_list = []
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+			perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
+	L2_running_min = np.minimum(L2_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	# attack_name = 'pointwise_L2'
-	# pointwise_L2 = atk.pointwise_attack_L2(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = pointwise_L2.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
-	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	attack_name = 'pointwise_L2'
+	pointwise_L2 = atk.pointwise_attack_L2(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = pointwise_L2.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
+	L2_running_min = np.minimum(L2_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	# attack_name = 'FGM'
-	# FGM = atk.FGM_attack(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = FGM.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
-	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	attack_name = 'FGM'
+	FGM = atk.FGM_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = FGM.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
+	L2_running_min = np.minimum(L2_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	# attack_name = 'BIM_L2'
-	# BIM_L2 = atk.BIM_L2_attack(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = BIM_L2.evaluate_resistance()
-	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
-	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
-	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	attack_name = 'BIM_L2'
+	BIM_L2 = atk.BIM_L2_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = BIM_L2.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
+	L2_running_min = np.minimum(L2_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	# attack_name = 'DeepFool_L2'
-	# DeepFool_L2 = atk.DeepFool_L2_attack(attack_dic)
-	# adversary_found, adversary_distance, adversaries_array, perturb_list = DeepFool_L2.evaluate_resistance()
+	attack_name = 'DeepFool_L2'
+	DeepFool_L2 = atk.DeepFool_L2_attack(attack_dic)
+	adversary_found, adversary_distance, adversaries_array, perturb_list = DeepFool_L2.evaluate_resistance()
+	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+		perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
+	L2_running_min = np.minimum(L2_running_min, adversary_distance)
+	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+	# attack_name = 'BrendelBethge'
+	# BrendelBethge = atk.brendel_bethge_attack_L2(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = BrendelBethge.evaluate_resistance()
 	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
 	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
 	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
@@ -540,16 +562,16 @@ def carry_out_attacks(adversarial_params, input_data, input_labels, x_placeholde
 	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
 	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	attack_name = 'hop_skip_L2'
-	#Uses the same number of iterations and log-steps as the boundary attack
-	hop_skip_L2 = atk.hop_skip_attack_L2(attack_dic,
-                num_iterations=adversarial_params['boundary_attack_iterations'],
-                log_every_n_steps=adversarial_params['boundary_attack_log_steps'])
-	adversary_found, adversary_distance, adversaries_array, perturb_list = hop_skip_L2.evaluate_resistance()
-	network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
-		perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
-	L2_running_min = np.minimum(L2_running_min, adversary_distance)
-	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	# attack_name = 'hop_skip_L2'
+	# #Uses the same number of iterations and log-steps as the boundary attack
+	# hop_skip_L2 = atk.hop_skip_attack_L2(attack_dic,
+ #                num_iterations=adversarial_params['boundary_attack_iterations'],
+ #                log_every_n_steps=adversarial_params['boundary_attack_log_steps'])
+	# adversary_found, adversary_distance, adversaries_array, perturb_list = hop_skip_L2.evaluate_resistance()
+	# network_dic[attack_name] = [float(s) for s in analysis(adversary_distance, perturb_list, 
+	# 	perturbation_threshold=adversarial_params['perturbation_threshold'][2])]
+	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
+	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
 
 	print("\nResults across all L2 attacks...")

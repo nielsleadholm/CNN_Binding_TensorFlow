@@ -6,6 +6,7 @@ import os
 import copy
 import math
 import foolbox
+#import foolbox.ext.native as fbn
 import scipy
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -40,7 +41,7 @@ class parent_attack:
 
     def evaluate_resistance(self):
 
-        logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
+        logits, _, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
         self.mk_dir()
 
@@ -68,7 +69,7 @@ class parent_attack:
             adversaries_array = np.zeros([self.num_attack_examples, self.input_data.shape[1], self.input_data.shape[2], self.input_data.shape[3]])
             perturb_list = []
 
-            self.attack_fmodel = self.attack_method(model=fmodel, criterion=self.criterion, distance=self.foolbox_distance_metric)
+            self.attack_specification(fmodel)
 
             for batch_iter in range(math.ceil(self.num_attack_examples/self.batch_size)):
 
@@ -91,6 +92,9 @@ class parent_attack:
                             execution_batch_data[example_iter], execution_batch_labels[example_iter], adversarial_images[example_iter], batch_iter*self.batch_size + example_iter, fmodel)
 
             return adversary_found, adversary_distance, adversaries_array, perturb_list
+
+    def attack_specification(self, fmodel):
+        self.attack_fmodel = self.attack_method(model=fmodel, criterion=self.criterion, distance=self.foolbox_distance_metric)
 
     #Make the attack directory for storing results
     def mk_dir(self):
@@ -142,7 +146,7 @@ class check_stochasticity(parent_attack):
 
     def perform_check(self):
 
-            logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
+            logits, _, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
             saver = tf.train.Saver(self.var_list)
 
             with tf.Session() as session:
@@ -192,7 +196,7 @@ class transfer_attack_L2(parent_attack):
     #Overwrite evaluate_resistance method with one that finds minimal transfer-attack images
     def evaluate_resistance(self):
 
-        logits, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
+        logits, _, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
         self.mk_dir()
 
@@ -242,10 +246,10 @@ class transfer_attack_L2(parent_attack):
         else:
             #Begin with an *unperturbed* image, as this may already be enough to fool the target model
             
-            #*** temporary alternative ***
-            transfer_perturbed = starting_adversary
+            # #*** temporary alternative ***
+            # transfer_perturbed = starting_adversary
 
-            #transfer_perturbed = unperturbed_image
+            transfer_perturbed = unperturbed_image
             
             #plt.imsave("Original" + str(example_iter) + ".png", np.squeeze(unperturbed_image, axis=2), cmap='gray')
 
@@ -253,39 +257,39 @@ class transfer_attack_L2(parent_attack):
             print("Ground truth label is " + str(np.argmax(ground_truth_label)))
 
 
-            # #While not misclassified or exceeding the maximum number of iterations, continue to perturb the image
-            # while not ((np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label)) or (current_iteration >= self.max_iterations)):
-            #     epsilon += self.epsilon_step_size
-            #     #print(epsilon)
-            #     current_iteration += 1
+            #While not misclassified or exceeding the maximum number of iterations, continue to perturb the image
+            while not ((np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label)) or (current_iteration >= self.max_iterations)):
+                epsilon += self.epsilon_step_size
+                #print(epsilon)
+                current_iteration += 1
 
-            #     transfer_perturbed = unperturbed_image + epsilon*(starting_adversary - unperturbed_image)
+                transfer_perturbed = unperturbed_image + epsilon*(starting_adversary - unperturbed_image)
 
-            #     #print("Current distance is " + str(self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())))
+                #print("Current distance is " + str(self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())))
 
-            #     if abs(epsilon - 1.0) <= 0.005:
-            #         print(current_iteration)
-            #         print(epsilon)
-            #         print(np.shape(transfer_perturbed))
-            #         print(transfer_perturbed[:,0,0])
-            #         print(starting_adversary[:,0,0])
-            #         assert np.all(transfer_perturbed == starting_adversary), "Perturbed image does not match starting adversary when original noise added."
+                # if abs(epsilon - 1.0) <= 0.005:
+                #     # print(current_iteration)
+                #     # print(epsilon)
+                #     # print(np.shape(transfer_perturbed))
+                #     # print(transfer_perturbed[:,0,0])
+                #     # print(starting_adversary[:,0,0])
+                #     assert np.all(transfer_perturbed == starting_adversary), "Perturbed image does not match starting adversary when original noise added."
 
-            #     transfer_perturbed = np.clip(transfer_perturbed, 0, 1)
+                transfer_perturbed = np.clip(transfer_perturbed, 0, 1)
 
-            #     #Check if all the values of the image are maximally perturbed, in which case break; note if the adversarial is misclassified, the true distance will be picked up later
-            #     if np.all((transfer_perturbed==0) | (transfer_perturbed==1))==True:
-            #         print("\n***Maximally perturbed transfer image, but still not misclassified\n")
-            #         adversary_distance[base_method_iter, example_iter] = np.inf
-            #         break
+                #Check if all the values of the image are maximally perturbed, in which case break; note if the adversarial is misclassified, the true distance will be picked up later
+                if np.all((transfer_perturbed==0) | (transfer_perturbed==1))==True:
+                    print("\n***Maximally perturbed transfer image, but still not misclassified\n")
+                    adversary_distance[base_method_iter, example_iter] = np.inf
+                    break
 
-            # print("Number of iterations performed: " + str(current_iteration))
+            print("Number of iterations performed: " + str(current_iteration))
 
-            # if current_iteration == self.max_iterations and np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) == np.argmax(ground_truth_label):
-            #     print("\n***Maximum specified iterations for transfer attack performed, but still not misclassified\n")
-            #     adversary_distance[base_method_iter, example_iter] = np.inf
+            if current_iteration == self.max_iterations and np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) == np.argmax(ground_truth_label):
+                print("\n***Maximum specified iterations for transfer attack performed, but still not misclassified\n")
+                adversary_distance[base_method_iter, example_iter] = np.inf
 
-            # print("Classification after transfer attack: " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
+            print("Classification after transfer attack: " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
 
             #plt.imsave("Base_adversary" + str(example_iter) + "_base_method_" + str(base_method_iter) + ".png", np.squeeze(starting_adversary, axis=2), cmap='gray')
             #plt.imsave("Transfer_adversary" + str(example_iter) + "_base_method_" + str(base_method_iter) + ".png", np.squeeze(transfer_perturbed, axis=2), cmap='gray')
@@ -316,41 +320,6 @@ class salt_pepper_attack(pointwise_attack_L0):
     #Inherit the attributes of the pointwise_attack_L0 class, then overwrite the attack method
     attack_method = foolbox.attacks.SaltAndPepperNoiseAttack
     attack_type_dir = 'Salt_and_Pepper'
-
-
-
-#*** L-Inf Distance Attacks ***
-
-class transfer_attack_LInf(transfer_attack_L2):
-    attack_type_dir = 'Transfer_LInf'
-
-    def distance_metric(self, vector1, vector2):
-        distance = scipy.spatial.distance.chebyshev(vector1, vector2)
-        distance_name = 'Chebyshev (L-Inf)'
-        return distance, distance_name
-
-class FGSM_attack(parent_attack):
-    attack_method = foolbox.attacks.GradientSignAttack
-    attack_type_dir = 'FGSM'
-    foolbox_distance_metric = foolbox.distances.Linfinity
-
-    def distance_metric(self, vector1, vector2):
-        distance = scipy.spatial.distance.chebyshev(vector1, vector2)
-        distance_name = 'Chebyshev (L-Inf)'
-        return distance, distance_name
-
-class BIM_Linfinity_attack(FGSM_attack):
-    attack_method = foolbox.attacks.LinfinityBasicIterativeAttack
-    attack_type_dir = 'BIM_LInf'
-
-class DeepFool_LInf_attack(FGSM_attack):
-    attack_method = foolbox.attacks.DeepFoolLinfinityAttack
-    attack_type_dir = 'DeepFool_LInf'
-
-class MIM_attack(FGSM_attack):
-    attack_method = foolbox.attacks.MomentumIterativeAttack
-    attack_type_dir = 'MIM'
-
 
 
 #*** L-2 Distance Attacks ***
@@ -394,6 +363,14 @@ class spatial_attack(parent_attack):
     attack_method = foolbox.attacks.SpatialAttack
     attack_type_dir = 'Spatial'
 
+# class brendel_bethge_attack_L2(parent_attack):
+#     attack_method = fbn.attacks.L2BrendelBethgeAttack
+#     attack_type_dir = 'BrendelBethge'
+
+#     #Note doesn't take a misclassification criterion argument, so over-write attack_specification method
+#     def attack_specification(self, fmodel):
+#         self.attack_fmodel = self.attack_method(model=fmodel)
+
 class boundary_attack(parent_attack):
     #Overwrite parent constructor for two additional attributes : num_iterations and log_every_n_steps
     def __init__(self, attack_dic,
@@ -420,4 +397,50 @@ class hop_skip_attack_L2(boundary_attack):
     #Note inhereits init and create_adversarial from boundary_attack
     attack_method = foolbox.attacks.HopSkipJumpAttack
     attack_type_dir = 'HopSkip_L2'
+
+
+
+
+#*** L-Inf Distance Attacks ***
+
+class transfer_attack_LInf(transfer_attack_L2):
+    attack_type_dir = 'Transfer_LInf'
+
+    def distance_metric(self, vector1, vector2):
+        distance = scipy.spatial.distance.chebyshev(vector1, vector2)
+        distance_name = 'Chebyshev (L-Inf)'
+        return distance, distance_name
+
+class FGSM_attack(parent_attack):
+    attack_method = foolbox.attacks.GradientSignAttack
+    attack_type_dir = 'FGSM'
+    foolbox_distance_metric = foolbox.distances.Linfinity
+
+    def distance_metric(self, vector1, vector2):
+        distance = scipy.spatial.distance.chebyshev(vector1, vector2)
+        distance_name = 'Chebyshev (L-Inf)'
+        return distance, distance_name
+
+class BIM_Linfinity_attack(FGSM_attack):
+    attack_method = foolbox.attacks.LinfinityBasicIterativeAttack
+    attack_type_dir = 'BIM_LInf'
+
+class DeepFool_LInf_attack(FGSM_attack):
+    attack_method = foolbox.attacks.DeepFoolLinfinityAttack
+    attack_type_dir = 'DeepFool_LInf'
+
+class MIM_attack(FGSM_attack):
+    attack_method = foolbox.attacks.MomentumIterativeAttack
+    attack_type_dir = 'MIM'
+
+class hop_skip_attack_LInf(boundary_attack):
+    #Note inhereits init and create_adversarial from boundary_attack
+    attack_method = foolbox.attacks.HopSkipJumpAttack
+    attack_type_dir = 'HopSkip_LInf'
+    foolbox_distance_metric = foolbox.distances.Linfinity
+
+    def distance_metric(self, vector1, vector2):
+        distance = scipy.spatial.distance.chebyshev(vector1, vector2)
+        distance_name = 'Chebyshev (L-Inf)'
+        return distance, distance_name
 
