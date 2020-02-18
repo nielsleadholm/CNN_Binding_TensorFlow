@@ -587,7 +587,7 @@ def gradient_unpooling_sequence(high_level, low_level, low_flat_shape, dropout_r
     #Apply drop-out to measure the effect of stochastic sparsity; note this dropout, if set above 0, is always applied (including during testing)
     gradient_unpool_binding_activations = tf.nn.dropout(gradient_unpool_binding_activations, rate=dynamic_dic['sparsification_dropout'])
 
-    tf.summary.histogram('Gradient_unpooling_activations', gradient_unpool_binding_activations)
+    # tf.compat.v1.summary.histogram('Gradient_unpooling_activations', gradient_unpool_binding_activations)
 
     scalar_dic['gradient_unpool_sparsity'] = tf.math.zero_fraction(gradient_unpool_binding_activations)
 
@@ -832,6 +832,20 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
                 rand_idx = np.random.permutation(len(training_labels))
                 shuffled_training_data = training_data[rand_idx]
                 shuffled_training_labels = training_labels[rand_idx]
+
+                # print(np.shape(shuffled_training_data))
+
+                # print(shuffled_training_data[0:3, 10:13, 10:13])
+                # print(np.max((np.max(shuffled_training_data, axis=1)), axis=0))
+
+                #Option to add Gaussian noise
+                if params['Gaussian_noise'] != None:
+                    print("Adding Gaussian noise to training data")
+                    #Also clip the data after noise
+                    shuffled_training_data = np.clip(shuffled_training_data + np.random.normal(0, scale=params['Gaussian_noise'], size=np.shape(shuffled_training_data)), 0, 1)
+
+                # print(shuffled_training_data[0:3, 10:13, 10:13])
+                # print(np.max((np.max(shuffled_training_data, axis=1)), axis=0))
 
                 training_accuracy_total = 0
                 for training_batch in range(math.ceil(len(training_labels)/params['batch_size'])):
