@@ -101,8 +101,41 @@ def initializer_fun(params, training_data, training_labels):
     #     weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['dense_b'], 
     #     biases['output_b']]
 
+    if params['architecture'] == 'MadryCNN':
 
-    if (params['dataset'] == 'mnist') or (params['dataset'] == 'fashion_mnist'): #Define core variables for a LeNet-5 architecture for MNIST/FashionMNIST
+        x = tf.compat.v1.placeholder(training_data.dtype, [None, 28, 28, 1], name='x-input')
+        
+        with tf.compat.v1.variable_scope(params['architecture']):
+            weights = {
+            'conv_W1' : tf.compat.v1.get_variable('CW1', shape=(5, 5, 1, 16), initializer=initializer),
+            'conv_W2' : tf.compat.v1.get_variable('CW2', shape=(5, 5, 16, 32), initializer=initializer),
+            'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(5*5*32, 512), initializer=initializer),
+            'output_W' : tf.compat.v1.get_variable('OW', shape=(512, 10), initializer=initializer)
+            }
+
+            #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
+            for weights_var in weights.values():
+                var_summaries(weights_var)
+
+            biases = {
+            'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(16), initializer=initializer),
+            'conv_b2' : tf.compat.v1.get_variable('Cb2', shape=(32), initializer=initializer),
+            'dense_b1' : tf.compat.v1.get_variable('Db1', shape=(512), initializer=initializer),
+            'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
+            }
+
+            for biases_var in biases.values():
+                var_summaries(biases_var)
+
+            decoder_weights = None
+
+        var_list = [weights['conv_W1'], weights['conv_W2'], weights['dense_W1'], 
+        weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['dense_b1'], 
+        biases['output_b']]
+
+
+
+    elif (params['dataset'] == 'mnist') or (params['dataset'] == 'fashion_mnist'): #Define core variables for a LeNet-5 architecture for MNIST/FashionMNIST
 
         x = tf.compat.v1.placeholder(training_data.dtype, [None, 28, 28, 1], name='x-input')
         
@@ -341,6 +374,36 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynam
         scalar_dic['distance_dense1'] = distance_dense1
 
     return logits, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2
+
+#High capacity model for MNIST with the same architecture as used in Madry et, 2017
+def MadryCNN_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_dic):
+
+    print("Building a Madry like CNN")
+
+    scalar_dic = {} #Store the sparsity of layer activations for later analysis
+    pool1_drop, pool1_indices, relu1, scalar_dic = conv1_sequence(features, dropout_rate_placeholder, weights, biases, scalar_dic)
+
+    pool2_drop, pool2_indices, relu2, scalar_dic = conv2_sequence(pool1_drop, dropout_rate_placeholder, weights, biases, scalar_dic)
+
+    #Operations distinct from other networks:
+    pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 32])
+    dense1 = tf.nn.bias_add(tf.matmul(pool2_flat, weights['dense_W1']), biases['dense_b1'])
+
+    #Note Madry architecture only has one fully connected layer
+    dense1_drop = tf.nn.dropout(dense1, rate=dropout_rate_placeholder)
+    dense1_drop = tf.nn.relu(dense1_drop)
+    logits = tf.nn.bias_add(tf.matmul(dense1_drop, weights['output_W']), biases['output_b'])
+
+    #Save latent activations and max-pooling indices for use in auto-encoder model
+    AutoEncoder_vars = {}
+
+    #Any L1 activation regularization used on the standard LeNet-5 applies to the fully-connected layer
+    l1_reg_activations1 = 0
+    l1_reg_activations2 = 0
+
+    return logits, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2
+
+
 
 def BindingCNN_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
@@ -757,6 +820,8 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
             predictions, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2 = VGG_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic'])
         elif params['architecture'] == 'BindingCNN':
             predictions, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2 = BindingCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
+        elif params['architecture'] == 'MadryCNN':
+            predictions, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2 = MadryCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
         elif params['architecture'] == 'BindingVGG':
             predictions, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2 = BindingVGG_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
         elif params['architecture'] == 'controlCNN':

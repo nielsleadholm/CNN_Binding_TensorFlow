@@ -15,8 +15,7 @@ from PIL import Image
 #of adversarial attacks against deep-learning models implimented in TensorFlow's Core API
 
 class parent_attack:
-    def __init__(self, attack_dic, 
-                    criterion=foolbox.criteria.Misclassification()):
+    def __init__(self, attack_dic):
             self.model_prediction_function = attack_dic['model_prediction_function']
             self.model_weights = attack_dic['model_weights']
             self.var_list = attack_dic['var_list']
@@ -32,10 +31,10 @@ class parent_attack:
             self.batch_size = attack_dic['batch_size']
             self.save_images = attack_dic['save_images']
             self.estimate_gradients = attack_dic['estimate_gradients']
-            self.criterion = criterion #note by default this is simply foolbox's Misclassification criterion
+            self.criterion = foolbox.criteria.Misclassification(attack_dic['input_labels']) #note by default this is simply foolbox's Misclassification criterion
 
     #Define the class attribute, attack_method, to be the Blended Uniform Noise attack by default
-    attack_method = foolbox.attacks.BlendedUniformNoiseAttack 
+    attack_method = foolbox.attacks.LinearSearchBlendedUniformNoiseAttack 
     foolbox_distance_metric = foolbox.distances.MeanSquaredDistance
     attack_type_dir = 'Parent_*_not_advised_*_'
 
@@ -236,7 +235,7 @@ class transfer_attack_L2(parent_attack):
         #First check if the base attack method failed on the surrogate model
         #If so, see if the target model correctly classifies it, in which case it is a failed attack, or otherwise it is a successful attack with distance 0
         if np.any(starting_adversary == None) or np.all(np.isnan(starting_adversary)):
-            if (np.argmax(fmodel.forward(unperturbed_image[None, :, :, :])) == ground_truth_label):
+            if (np.argmax(fmodel.forward(unperturbed_image[None, :, :, :])) == np.argmax(ground_truth_label)):
                 print("Base attack failed, and target model correctly classified image.")
                 adversary_distance[base_method_iter, example_iter] = np.inf
             else:
@@ -245,10 +244,6 @@ class transfer_attack_L2(parent_attack):
 
         else:
             #Begin with an *unperturbed* image, as this may already be enough to fool the target model
-            
-            # #*** temporary alternative ***
-            # transfer_perturbed = starting_adversary
-
             transfer_perturbed = unperturbed_image
             
             #plt.imsave("Original" + str(example_iter) + ".png", np.squeeze(unperturbed_image, axis=2), cmap='gray')
@@ -257,48 +252,101 @@ class transfer_attack_L2(parent_attack):
             print("Ground truth label is " + str(np.argmax(ground_truth_label)))
 
 
-            #While not misclassified or exceeding the maximum number of iterations, continue to perturb the image
-            while not ((np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label)) or (current_iteration >= self.max_iterations)):
-                epsilon += self.epsilon_step_size
-                #print(epsilon)
-                current_iteration += 1
 
-                transfer_perturbed = unperturbed_image + epsilon*(starting_adversary - unperturbed_image)
+            # *** binary search as used in Schott et al ****
+            direction = starting_adversary - unperturbed_image
+            bad = 0
+            good = None
+            epsilon_binary = 1
+            k = 10
 
-                #print("Current distance is " + str(self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())))
-
-                # if abs(epsilon - 1.0) <= 0.005:
-                #     # print(current_iteration)
-                #     # print(epsilon)
-                #     # print(np.shape(transfer_perturbed))
-                #     # print(transfer_perturbed[:,0,0])
-                #     # print(starting_adversary[:,0,0])
-                #     assert np.all(transfer_perturbed == starting_adversary), "Perturbed image does not match starting adversary when original noise added."
-
+            #Rapidly identify starting point for binary search
+            for _ in range(k):
+                transfer_perturbed = unperturbed_image + epsilon_binary * direction
                 transfer_perturbed = np.clip(transfer_perturbed, 0, 1)
-
-                #Check if all the values of the image are maximally perturbed, in which case break; note if the adversarial is misclassified, the true distance will be picked up later
-                if np.all((transfer_perturbed==0) | (transfer_perturbed==1))==True:
-                    print("\n***Maximally perturbed transfer image, but still not misclassified\n")
-                    adversary_distance[base_method_iter, example_iter] = np.inf
+                
+                print("Epsilon is " + str(epsilon_binary))
+                if (np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label)):
+                    good = epsilon_binary
                     break
+                else:
+                    bad = epsilon_binary
 
-            print("Number of iterations performed: " + str(current_iteration))
+                epsilon_binary *= 2
 
-            if current_iteration == self.max_iterations and np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) == np.argmax(ground_truth_label):
-                print("\n***Maximum specified iterations for transfer attack performed, but still not misclassified\n")
+            print("After exponential binary search, the classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
+ 
+            if np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) == np.argmax(ground_truth_label):
+                print("Exponential search failed")
                 adversary_distance[base_method_iter, example_iter] = np.inf
+                print("The distance is " + str(adversary_distance[base_method_iter, example_iter]))
+                
 
-            print("Classification after transfer attack: " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
-
-            #plt.imsave("Base_adversary" + str(example_iter) + "_base_method_" + str(base_method_iter) + ".png", np.squeeze(starting_adversary, axis=2), cmap='gray')
-            #plt.imsave("Transfer_adversary" + str(example_iter) + "_base_method_" + str(base_method_iter) + ".png", np.squeeze(transfer_perturbed, axis=2), cmap='gray')
-
-            #If neither of the above escape situations occured (i.e. misclassification was successful)
-            if np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label):
-                adversary_distance[base_method_iter, example_iter], _ = self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())
             else:
-                adversary_distance[base_method_iter, example_iter] = np.inf
+                for _ in range(k):
+                    epsilon_binary = (good + bad) / 2.
+                    transfer_perturbed = unperturbed_image + epsilon_binary * direction
+                    transfer_perturbed = np.clip(transfer_perturbed, 0, 1)
+
+                    if (np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label)):
+                        good = epsilon_binary
+                    else:
+                        bad = epsilon_binary
+
+                adversary_distance[base_method_iter, example_iter], _ = self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())
+                print("After standard binary search, the classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
+                print("The distance is " + str(adversary_distance[base_method_iter, example_iter]))
+
+
+
+            # #While not misclassified or exceeding the maximum number of iterations, continue to perturb the image
+            # while not ((np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label)) or (current_iteration >= self.max_iterations)):
+                
+            #     # *** original, naive version ****
+            #     epsilon += self.epsilon_step_size
+            #     #print(epsilon)
+            #     current_iteration += 1
+
+            #     transfer_perturbed = unperturbed_image + epsilon*(starting_adversary - unperturbed_image)
+
+
+
+
+
+            #     #print("Current distance is " + str(self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())))
+
+            #     # if abs(epsilon - 1.0) <= 0.005:
+            #     #     # print(current_iteration)
+            #     #     # print(epsilon)
+            #     #     # print(np.shape(transfer_perturbed))
+            #     #     # print(transfer_perturbed[:,0,0])
+            #     #     # print(starting_adversary[:,0,0])
+            #     #     assert np.all(transfer_perturbed == starting_adversary), "Perturbed image does not match starting adversary when original noise added."
+
+            #     transfer_perturbed = np.clip(transfer_perturbed, 0, 1)
+
+            #     #Check if all the values of the image are maximally perturbed, in which case break; note if the adversarial is misclassified, the true distance will be picked up later
+            #     if np.all((transfer_perturbed==0) | (transfer_perturbed==1))==True:
+            #         print("\n***Maximally perturbed transfer image, but still not misclassified\n")
+            #         adversary_distance[base_method_iter, example_iter] = np.inf
+            #         break
+
+            # print("Number of iterations performed: " + str(current_iteration))
+
+            # if current_iteration >= self.max_iterations and np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) == np.argmax(ground_truth_label):
+            #     print("\n***Maximum specified iterations for transfer attack performed, but still not misclassified\n")
+            #     adversary_distance[base_method_iter, example_iter] = np.inf
+
+            # print("Classification after transfer attack: " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
+
+            # #plt.imsave("Base_adversary" + str(example_iter) + "_base_method_" + str(base_method_iter) + ".png", np.squeeze(starting_adversary, axis=2), cmap='gray')
+            # #plt.imsave("Transfer_adversary" + str(example_iter) + "_base_method_" + str(base_method_iter) + ".png", np.squeeze(transfer_perturbed, axis=2), cmap='gray')
+
+            # #If neither of the above escape situations occured (i.e. misclassification was successful)
+            # if np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label):
+            #     adversary_distance[base_method_iter, example_iter], _ = self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())
+            # else:
+            #     adversary_distance[base_method_iter, example_iter] = np.inf
 
         return adversary_distance
 
@@ -331,6 +379,28 @@ class blended_noise_attack(parent_attack):
 class gaussian_noise_attack(parent_attack):
     attack_method = foolbox.attacks.AdditiveGaussianNoiseAttack
     attack_type_dir = 'Gaussian_noise'
+
+#Note the Schott transfer attack is not capable of batched-attacks
+# class Schott_transfer_attack_L2(parent_attack):
+#     #Overwrite parent constructor for additional attributes
+#     def __init__(self, attack_dic,
+#                     criterion=foolbox.criteria.Misclassification(), 
+#                     starting_adversaries=starting_adversaries):
+#             parent_attack.__init__(self, attack_dic,
+#                     criterion)
+#             self.starting_adversaries = starting_adversaries
+    
+#     attack_method = BinarySearchTransferAttack
+#     attack_type_dir = 'Schott_transfer_L2'
+
+#     #Overwrite create adversarial method, as the transfer attack requires the starting adversary
+#     def create_adversarial(self, execution_data, execution_label, starting_adversaries):
+
+#             adversarial_images = self.attack_fmodel(input_or_adv=execution_data, label=execution_label,
+#                 source_adversarial=self.starting_adversaries)
+
+#             return adversarial_images
+
 
 class pointwise_attack_L2(parent_attack):
     #Note this version of the point-wise attack inherits the L2 distance metric from the parent class
@@ -373,12 +443,10 @@ class spatial_attack(parent_attack):
 
 class boundary_attack(parent_attack):
     #Overwrite parent constructor for two additional attributes : num_iterations and log_every_n_steps
-    def __init__(self, attack_dic,
-                    criterion=foolbox.criteria.Misclassification(), 
+    def __init__(self, attack_dic, 
                     num_iterations=50,
                     log_every_n_steps=50):
-            parent_attack.__init__(self, attack_dic,
-                    criterion)
+            parent_attack.__init__(self, attack_dic)
             self.num_iterations = num_iterations
             self.log_every_n_steps = log_every_n_steps
     
