@@ -3,12 +3,14 @@
 import tensorflow as tf
 import numpy as np
 import math
+import pandas as pd
 from keras.utils import to_categorical
 import matplotlib.pyplot as plt
 from bokeh.plotting import output_notebook, figure, show
 from bokeh.models import ColumnDataSource
 from bokeh.io import export_png, save
 import os
+from Systematic_resistance_evaluation import carry_out_attacks
 
 
 # Disable unecessary logging
@@ -16,7 +18,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 #Boundary visualization code from Data Visualizations tutorial by Gaurav-Kaushik (https://github.com/gaurav-kaushik/Data-Visualizations-Medium)
 
-def generate_toy_data(data_size, data_set):
+def generate_toy_data(data_size, data_set, noise=None):
 
     if data_set == 'linear':
 
@@ -37,6 +39,11 @@ def generate_toy_data(data_size, data_set):
      
         x_data = np.transpose(np.concatenate((inner_circle, outer_circle), axis=1))
 
+        if noise != None:
+            print("Adding Gaussian noise to training data")
+            x_data = x_data + np.random.normal(0, scale=noise, 
+                size=np.shape(x_data))
+
         np.random.shuffle(x_data)
         
         #Not efficient label generation but useful sanity check
@@ -46,62 +53,61 @@ def generate_toy_data(data_size, data_set):
 
     return x_data, one_hot_labels
 
-def toy_initializer(network_iter):
+def toy_initializer(network_iter, model_params):
     
     tf.reset_default_graph()
 
     x_placeholder = tf.compat.v1.placeholder(tf.float32, [None, 2])
     y_placeholder = tf.compat.v1.placeholder(tf.int32, [None, 2])
+    dropout_rate_placeholder = tf.compat.v1.placeholder(tf.float32)
 
     initializer = tf.contrib.layers.variance_scaling_initializer()
 
     with tf.name_scope('Network_' + str(network_iter)):
         weights = {
-            'w1' : tf.compat.v1.get_variable('w1', shape=(2,4), initializer=initializer),
-            'w2' : tf.compat.v1.get_variable('w2', shape=(4,4), initializer=initializer),
-            'w3' : tf.compat.v1.get_variable('w3', shape=(4,2), initializer=initializer)
+            'w1' : tf.compat.v1.get_variable('w1', shape=(2,model_params['network_width']), initializer=initializer),
+            'w2' : tf.compat.v1.get_variable('w2', shape=(model_params['network_width'],model_params['network_width']), initializer=initializer),
+            'w3' : tf.compat.v1.get_variable('w3', shape=(model_params['network_width'],2), initializer=initializer)
         }
 
         biases = {
-            'b1' : tf.compat.v1.get_variable('b1', shape=(4), initializer=initializer),
-            'b2' : tf.compat.v1.get_variable('b2', shape=(4), initializer=initializer),
+            'b1' : tf.compat.v1.get_variable('b1', shape=(model_params['network_width']), initializer=initializer),
+            'b2' : tf.compat.v1.get_variable('b2', shape=(model_params['network_width']), initializer=initializer),
             'b3' : tf.compat.v1.get_variable('b3', shape=(2), initializer=initializer)
         }
 
-    if (params['architecture'] == 'BindingCNN') or (params['architecture'] == 'controlCNN'):
-        weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(1600, 120), initializer=initializer)
-        weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(1176, 120), initializer=initializer)
-
-
     var_list = [weights['w1'], weights['w2'], weights['w3'], biases['b1'], biases['b2'], biases['b3']]
 
-    if (params['architecture'] == 'BindingCNN') or (params['architecture'] == 'controlCNN'):
-        var_list.append(weights['course_bindingW1'])
-        var_list.append(weights['finegrained_bindingW1'])
+    if (model_params['architecture'] == 'BindingMLP'):
+        weights['w1_binding'] = tf.compat.v1.get_variable('w1_binding', shape=(model_params['network_width'], 2), initializer=initializer)
+
+        var_list.append(weights['w1_binding'])
 
 
-    return x_placeholder, y_placeholder, weights, biases, var_list
+    return x_placeholder, y_placeholder, dropout_rate_placeholder, weights, biases, var_list
 
-def MLP_predictions(x_input, weights, biases):
+def MLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
     layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
     layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
 
     logits = tf.nn.bias_add(tf.matmul(layer_2, weights['w3']), biases['b3'])
 
-    return logits
+    dummy = {}
 
-def Binding_MLP_predictions(x_input, weights, biases):
+    return logits, {}, {}, 0.0, 0.0
+
+def BindingMLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
     layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
     layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
 
-    binding_layer = gradient_unpooling_sequence(layer_2, layer_1, low_flat_shape=[-1,4])
+    binding_layer = gradient_unpooling_sequence(layer_2, layer_1, low_flat_shape=[-1,dynamic_dic['binding_width']])
 
-    logits = tf.add(tf.nn.bias_add(tf.matmul(layer_2, weights['w3']), biases['b3']), 
-        tf.nn.bias_add(tf.matmul(binding_layer, weights['w1_binding']), biases['b1_binding']))
+    logits = tf.nn.bias_add(tf.add(tf.matmul(layer_2, weights['w3']), 
+        tf.matmul(binding_layer, weights['w1_binding'])), biases['b3'])
 
-    return logits
+    return logits, {}, {}, 0.0, 0.0
 
 def gradient_unpooling_sequence(high_level, low_level, low_flat_shape):
 
@@ -118,29 +124,33 @@ def gradient_unpooling_sequence(high_level, low_level, low_flat_shape):
 
     return gradient_unpool_binding_activations
 
-def train_toy(x_placeholder, y_placeholder, training_data, training_labels, 
-        testing_data, testing_labels, mesh, weights, biases, params):
+def train_toy(x_placeholder, y_placeholder, dropout_rate_placeholder, training_data, training_labels, 
+        testing_data, testing_labels, mesh, weights, biases, var_list, model_params, network_iter):
     
-    predictions = MLP_predictions(x_placeholder, weights, biases)
-
-    # *** note shouldn't need to use softmax-cross entropy here
-
+    if model_params['architecture'] == 'MLP':
+        print("\nTraining standard MLP")
+        predictions, _, _, _, _ = MLP_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, model_params['dynamic_dic'])
+    elif model_params['architecture'] == 'BindingMLP':
+        print("\nTraining Binding MLP")
+        predictions, _, _, _, _ = BindingMLP_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, dynamic_dic=model_params['dynamic_dic'])
 
     cost = tf.reduce_mean(tf.compat.v1.losses.sigmoid_cross_entropy(logits=predictions, 
-        multi_class_labels=y_placeholder, label_smoothing=params['smoothing_coefficient']))
+        multi_class_labels=y_placeholder, label_smoothing=model_params['smoothing_coefficient']))
     correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
     optimizer=tf.compat.v1.train.AdamOptimizer(learning_rate=0.1).minimize(cost)
 
+    saver = tf.compat.v1.train.Saver(var_list)
+
     with tf.compat.v1.Session() as sess:
         sess.run(tf.compat.v1.global_variables_initializer())
 
-        for epoch in range(30):
-            run_optim = sess.run(optimizer, feed_dict = {x_placeholder: training_data, y_placeholder: training_labels})
-            loss, training_acc = sess.run([cost, accuracy], feed_dict = {x_placeholder: training_data, y_placeholder: training_labels})
+        for epoch in range(model_params['training_epochs']):
+            run_optim = sess.run(optimizer, feed_dict = {x_placeholder: training_data, dropout_rate_placeholder: None, y_placeholder: training_labels})
+            loss, training_acc = sess.run([cost, accuracy], feed_dict = {x_placeholder: training_data, dropout_rate_placeholder: None, y_placeholder: training_labels})
 
-            testing_acc = sess.run(accuracy, feed_dict = {x_placeholder: testing_data, y_placeholder: testing_labels})
+            testing_acc = sess.run(accuracy, feed_dict = {x_placeholder: testing_data, dropout_rate_placeholder: None, y_placeholder: testing_labels})
 
             print("At iteration " + str(epoch) + ", Loss = " + \
                  "{:.4f}".format(loss) + ", Training Accuracy = " + \
@@ -149,12 +159,14 @@ def train_toy(x_placeholder, y_placeholder, training_data, training_labels,
 
         print("\nTraining complete.")
 
+        save_path = saver.save(sess, "network_weights_data/" + str(network_iter) + '_' + model_params['architecture'] + str(model_params['network_width']) + ".ckpt")
+
         # Get predictions for each point in the mesh
-        mesh_pred = sess.run(predictions, feed_dict = {x_placeholder: np.c_[mesh[0].ravel(), mesh[1].ravel()]})
+        mesh_pred = sess.run(predictions, feed_dict = {x_placeholder: np.c_[mesh[0].ravel(), mesh[1].ravel()], dropout_rate_placeholder: None, })
         
         # Get predictions for test data, and for all data
-        test_pred = sess.run(predictions, feed_dict = {x_placeholder: testing_data})
-        data_pred = sess.run(predictions, feed_dict = {x_placeholder: np.concatenate((training_data, testing_data), axis=0)})
+        test_pred = sess.run(predictions, feed_dict = {x_placeholder: testing_data, dropout_rate_placeholder: None, })
+        data_pred = sess.run(predictions, feed_dict = {x_placeholder: np.concatenate((training_data, testing_data), axis=0), dropout_rate_placeholder: None, })
 
         #print(mesh_pred[0:5])
         mesh_pred = np.argmax(mesh_pred, axis=1)
@@ -163,7 +175,7 @@ def train_toy(x_placeholder, y_placeholder, training_data, training_labels,
         data_pred = np.argmax(data_pred, axis=1)
 
 
-        return mesh_pred, test_pred, data_pred
+        return training_acc, testing_acc, mesh_pred, test_pred, data_pred
 
 
 def visualize_data(data, labels):
@@ -275,47 +287,62 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
 
     return
 
-# def label_smoothing(labels, smoothing_coefficient):
-#     #Labels - note these are taken in as one-hot encoding, and returned as one-'warm' (i.e. smoothed) encoding
-#     labels = labels.astype(float)
-#     print(labels.shape)
-#     print(labels[0:5])
-#     for ii in range(np.shape(labels)[0]):
-#       labels[ii, :] = labels[ii, :] * (1-smoothing_coefficient)
-#       labels[ii, :] = labels[ii, :] + smoothing_coefficient/len(labels[ii, :])
-#     print(labels[0:5])
+def generate_toy_visual(model_params, adversarial_params, network_iter, all_results_df):
 
-#     return labels
+    iter_dic = {}
 
-def generate_toy_visual(params, network_iter):
+    data_size = model_params['data_size']
+    step = model_params['step']
+    data_set = model_params['data_set']
 
-    data_size = params['data_size']
-    step = params['step']
-    data_set = params['data_set']
+    training_data, training_labels = generate_toy_data(data_size, data_set, noise=model_params['Gaussian_noise'])
 
-    training_data, training_labels = generate_toy_data(data_size, data_set)
+    #smooth_training_labels = label_smoothing(training_labels, model_params['smoothing_coefficient'])
 
-    if params['Gaussian_noise'] != None:
-        print("Adding Gaussian noise to training data")
-        training_data = training_data + np.random.normal(0, scale=params['Gaussian_noise'], 
-            size=np.shape(training_data))
+    testing_data, testing_labels = generate_toy_data(data_size, data_set, noise=None)
 
-    #smooth_training_labels = label_smoothing(training_labels, params['smoothing_coefficient'])
+    #Normalize data, accounting for larger values in training data if noise added
+    data_min = np.minimum(np.amin(training_data, axis=0), np.amin(testing_data, axis=0))
+    data_max = np.maximum(np.amax(training_data, axis=0), np.amax(testing_data, axis=0))
 
-    testing_data, testing_labels = generate_toy_data(data_size, data_set)
+    training_data = (training_data - data_min)/(data_max - data_min)
+    testing_data = (testing_data - data_min)/(data_max - data_min)
 
-    x_placeholder, y_placeholder, weights, biases, var_list = toy_initializer(network_iter)
+
+    x_placeholder, y_placeholder, dropout_rate_placeholder, weights, biases, var_list = toy_initializer(network_iter, model_params)
 
     #visualize_data(training_data, training_labels)
 
     all_data = np.concatenate((training_data, testing_data), axis=0)
     all_labels = (np.concatenate((training_labels, testing_labels), axis=0)[:, 1]).astype(int)
 
-
     mesh_ = create_mesh(all_data, step=step)
 
-    mesh_pred, test_pred, data_pred = train_toy(x_placeholder, y_placeholder, training_data, training_labels, testing_data, testing_labels, mesh_,
-     weights, biases, params)
+    training_acc, testing_acc, mesh_pred, test_pred, data_pred = train_toy(x_placeholder, y_placeholder, dropout_rate_placeholder, training_data, training_labels, testing_data, testing_labels, mesh_,
+     weights, biases, var_list, model_params, network_iter)
+
+    iter_dic.update({'training_accuracy':float(training_acc), 'testing_accuracy':float(testing_acc)})
+
+    functions = globals().copy()
+    functions.update(locals())
+    pred_function = functions.get(model_params['architecture'] + '_predictions')
+    if not pred_function:
+         raise NotImplementedError("Prediction function %s not implemented" % (model_params['architecture'] + '_predictions'))
+
+
+    iter_dic.update(carry_out_attacks(model_params=model_params, adversarial_params=adversarial_params, 
+        pred_function=pred_function, input_data=testing_data, input_labels=testing_labels, 
+        x_placeholder=x_placeholder, var_list=var_list, weights=weights, biases=biases, 
+        network_name_str=str(network_iter) + '_' + model_params['architecture'] + str(model_params['network_width']), 
+        iter_num=network_iter, dynamic_dic=model_params['dynamic_dic']))
+
+    print("\n\nThe cumulative results are...\n")
+    print(iter_dic)
+    iter_df = pd.DataFrame(data=iter_dic, index=[network_iter], dtype=np.float32)
+    all_results_df = all_results_df.append(iter_df)
+    print(all_results_df)
+    all_results_df.to_pickle('Results.pkl')
+    all_results_df.to_csv('Results.csv')
 
     toy_colormap = {'0': 'red', '1': 'dodgerblue'} 
     toy_labelmap = {'0': 'negative', '1': 'positive'} 
@@ -325,17 +352,36 @@ def generate_toy_visual(params, network_iter):
                             mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred,
                              step_=step, colormap_=toy_colormap, labelmap_=toy_labelmap, network_iter=network_iter)
 
+    return all_results_df
+
 if __name__ == '__main__':
 
-    params = {
+    model_params = {
+    'architecture' : 'MLP',
+    'network_width' : 8,
+    'dynamic_dic' : {'binding_width': 8},
+    'training_epochs' : 50,
     'Gaussian_noise' : 0.3,
     'smoothing_coefficient' : 0.01,
     'step' : 0.01,
     'data_set' : 'circle',
-    'num_networks' : 10,
-    'data_size' : 1000
+    'num_networks' : 20,
+    'data_size' : 5000,
+    'batch_size' : 128
     }
 
-    for network_iter in range(params['num_networks']):
+    adversarial_params = {
+        'num_attack_examples':128,
+        'transfer_attack_setup':False,
+        'estimate_gradients':False,
+        'boundary_attack_iterations':100,
+        'boundary_attack_log_steps':100,
+        'perturbation_threshold':{'L0':12, 'LInf':0.3,  'L2':1.5},
+        'save_images':False
+        }
 
-        generate_toy_visual(params, network_iter)
+    all_results_df=pd.DataFrame({})
+
+    for network_iter in range(model_params['num_networks']):
+
+        all_results_df = generate_toy_visual(model_params, adversarial_params, network_iter, all_results_df)

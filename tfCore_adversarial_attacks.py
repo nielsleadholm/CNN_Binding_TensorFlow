@@ -15,7 +15,8 @@ from PIL import Image
 #of adversarial attacks against deep-learning models implimented in TensorFlow's Core API
 
 class parent_attack:
-    def __init__(self, attack_dic):
+    def __init__(self, attack_dic, 
+                    criterion=foolbox.criteria.Misclassification()):
             self.model_prediction_function = attack_dic['model_prediction_function']
             self.model_weights = attack_dic['model_weights']
             self.var_list = attack_dic['var_list']
@@ -31,10 +32,10 @@ class parent_attack:
             self.batch_size = attack_dic['batch_size']
             self.save_images = attack_dic['save_images']
             self.estimate_gradients = attack_dic['estimate_gradients']
-            self.criterion = foolbox.criteria.Misclassification(attack_dic['input_labels']) #note by default this is simply foolbox's Misclassification criterion
+            self.criterion = criterion #note by default this is simply foolbox's Misclassification criterion
 
     #Define the class attribute, attack_method, to be the Blended Uniform Noise attack by default
-    attack_method = foolbox.attacks.LinearSearchBlendedUniformNoiseAttack 
+    attack_method = foolbox.attacks.BlendedUniformNoiseAttack 
     foolbox_distance_metric = foolbox.distances.MeanSquaredDistance
     attack_type_dir = 'Parent_*_not_advised_*_'
 
@@ -65,18 +66,20 @@ class parent_attack:
             #Arrays for storing results of the evaluation
             adversary_found = np.zeros([self.num_attack_examples]) #array of booleans that indicates if an adversary was found for a particular image
             adversary_distance = np.zeros([self.num_attack_examples])
-            adversaries_array = np.zeros([self.num_attack_examples, self.input_data.shape[1], self.input_data.shape[2], self.input_data.shape[3]])
-            perturb_list = []
+
+            adversaries_array = np.zeros(np.concatenate(([self.num_attack_examples], self.input_data.shape[1:])))
+            adversary_labels = []
 
             self.attack_specification(fmodel)
 
             for batch_iter in range(math.ceil(self.num_attack_examples/self.batch_size)):
 
-                execution_batch_data = self.input_data[batch_iter*self.batch_size:min((batch_iter+1)*self.batch_size, self.num_attack_examples), :, :, :]
-                execution_batch_labels = np.argmax(self.input_labels[batch_iter*self.batch_size:min((batch_iter+1)*self.batch_size, self.num_attack_examples), :], axis=1)
+                execution_batch_data = self.input_data[batch_iter*self.batch_size:min((batch_iter+1)*self.batch_size, self.num_attack_examples)]
+                execution_batch_labels = np.argmax(self.input_labels[batch_iter*self.batch_size:min((batch_iter+1)*self.batch_size, self.num_attack_examples)], axis=1)
 
                 #Carry out the attack
-                adversarial_images = self.create_adversarial(execution_batch_data, execution_batch_labels)
+                adversarial_images, batch_adversary_labels = self.create_adversarial(execution_batch_data, execution_batch_labels)
+                adversary_labels.append(batch_adversary_labels)
 
                 #Process results of the batched attack
                 for example_iter in range(execution_batch_data.shape[0]):
@@ -90,7 +93,9 @@ class parent_attack:
                         adversary_found, adversary_distance, adversaries_array = self.store_data(adversary_found, adversary_distance, adversaries_array,
                             execution_batch_data[example_iter], execution_batch_labels[example_iter], adversarial_images[example_iter], batch_iter*self.batch_size + example_iter, fmodel)
 
-            return adversary_found, adversary_distance, adversaries_array, perturb_list
+            adversary_labels = np.asarray(adversary_labels)
+
+            return adversary_found, adversary_distance, adversaries_array, adversary_labels
 
     def attack_specification(self, fmodel):
         self.attack_fmodel = self.attack_method(model=fmodel, criterion=self.criterion, distance=self.foolbox_distance_metric)
@@ -109,12 +114,16 @@ class parent_attack:
 
     def create_adversarial(self, execution_data, execution_label):
 
-        adversarial_images = self.attack_fmodel(execution_data, execution_label)
-        return adversarial_images
+        adversarials = self.attack_fmodel(execution_data, execution_label, unpack=False)
+
+        adversary_labels = np.asarray([a.adversarial_class for a in adversarials])
+        adversarial_images = np.asarray([a.perturbed for a in adversarials])
+
+        return adversarial_images, adversary_labels
 
     def store_data(self, adversary_found, adversary_distance, adversaries_array, execution_data, execution_label, adversarial_image, results_iter, fmodel):
         
-        adversaries_array[results_iter, :, :, :] = adversarial_image
+        adversaries_array[results_iter] = adversarial_image
 
         if self.save_images == True:
             if adversarial_image.shape[2] == 3:
@@ -127,7 +136,7 @@ class parent_attack:
                 self.attack_type_dir + '/AttackNum' + str(results_iter) + '_Predicted' + str(np.argmax(fmodel.forward(adversarial_image[None, :, :, :]))) + 
                 '_GroundTruth' + str(execution_label) + '.png', image_to_png)
 
-        print("The classification label following attack is " + str(np.argmax(fmodel.forward(adversarial_image[None, :, :, :]))) + " from an original classification of " + str(execution_label))
+        print("The classification label following attack is " + str(np.argmax(fmodel.forward(adversarial_image[None]))) + " from an original classification of " + str(execution_label))
         distance, distance_name = self.distance_metric(execution_data.flatten(), adversarial_image.flatten())
         print("The " + distance_name + " distance of the adversary is " + str(distance))
         adversary_found[results_iter] = 1
@@ -235,7 +244,7 @@ class transfer_attack_L2(parent_attack):
         #First check if the base attack method failed on the surrogate model
         #If so, see if the target model correctly classifies it, in which case it is a failed attack, or otherwise it is a successful attack with distance 0
         if np.any(starting_adversary == None) or np.all(np.isnan(starting_adversary)):
-            if (np.argmax(fmodel.forward(unperturbed_image[None, :, :, :])) == np.argmax(ground_truth_label)):
+            if (np.argmax(fmodel.forward(unperturbed_image[None])) == np.argmax(ground_truth_label)):
                 print("Base attack failed, and target model correctly classified image.")
                 adversary_distance[base_method_iter, example_iter] = np.inf
             else:
@@ -248,7 +257,7 @@ class transfer_attack_L2(parent_attack):
             
             #plt.imsave("Original" + str(example_iter) + ".png", np.squeeze(unperturbed_image, axis=2), cmap='gray')
 
-            print("Original classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
+            print("Original classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None]))))
             print("Ground truth label is " + str(np.argmax(ground_truth_label)))
 
 
@@ -266,7 +275,7 @@ class transfer_attack_L2(parent_attack):
                 transfer_perturbed = np.clip(transfer_perturbed, 0, 1)
                 
                 print("Epsilon is " + str(epsilon_binary))
-                if (np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label)):
+                if (np.argmax(fmodel.forward(transfer_perturbed[None])) != np.argmax(ground_truth_label)):
                     good = epsilon_binary
                     break
                 else:
@@ -274,9 +283,9 @@ class transfer_attack_L2(parent_attack):
 
                 epsilon_binary *= 2
 
-            print("After exponential binary search, the classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
+            print("After exponential binary search, the classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None]))))
  
-            if np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) == np.argmax(ground_truth_label):
+            if np.argmax(fmodel.forward(transfer_perturbed[None])) == np.argmax(ground_truth_label):
                 print("Exponential search failed")
                 adversary_distance[base_method_iter, example_iter] = np.inf
                 print("The distance is " + str(adversary_distance[base_method_iter, example_iter]))
@@ -288,13 +297,13 @@ class transfer_attack_L2(parent_attack):
                     transfer_perturbed = unperturbed_image + epsilon_binary * direction
                     transfer_perturbed = np.clip(transfer_perturbed, 0, 1)
 
-                    if (np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label)):
+                    if (np.argmax(fmodel.forward(transfer_perturbed[None])) != np.argmax(ground_truth_label)):
                         good = epsilon_binary
                     else:
                         bad = epsilon_binary
 
                 adversary_distance[base_method_iter, example_iter], _ = self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())
-                print("After standard binary search, the classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
+                print("After standard binary search, the classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None]))))
                 print("The distance is " + str(adversary_distance[base_method_iter, example_iter]))
 
 
@@ -443,10 +452,12 @@ class spatial_attack(parent_attack):
 
 class boundary_attack(parent_attack):
     #Overwrite parent constructor for two additional attributes : num_iterations and log_every_n_steps
-    def __init__(self, attack_dic, 
+    def __init__(self, attack_dic,
+                    criterion=foolbox.criteria.Misclassification(), 
                     num_iterations=50,
                     log_every_n_steps=50):
-            parent_attack.__init__(self, attack_dic)
+            parent_attack.__init__(self, attack_dic,
+                    criterion)
             self.num_iterations = num_iterations
             self.log_every_n_steps = log_every_n_steps
     
@@ -456,10 +467,13 @@ class boundary_attack(parent_attack):
     #Overwrite create adversarial method, as the boundary attack takes a specified number of iterations
     def create_adversarial(self, execution_data, execution_label):
 
-            adversarial_images = self.attack_fmodel(execution_data, execution_label, iterations=self.num_iterations, 
-                log_every_n_steps=self.log_every_n_steps, verbose=False)
+        adversarials = self.attack_fmodel(execution_data, execution_label, iterations=self.num_iterations, 
+            log_every_n_steps=self.log_every_n_steps, verbose=False, unpack=False)
 
-            return adversarial_images
+        adversary_labels = np.asarray([a.adversarial_class for a in adversarials])
+        adversarial_images = np.asarray([a.perturbed for a in adversarials])
+
+        return adversarial_images, adversary_labels
 
 class hop_skip_attack_L2(boundary_attack):
     #Note inhereits init and create_adversarial from boundary_attack
