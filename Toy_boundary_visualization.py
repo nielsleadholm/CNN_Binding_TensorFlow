@@ -18,6 +18,34 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 #Boundary visualization code from Data Visualizations tutorial by Gaurav-Kaushik (https://github.com/gaurav-kaushik/Data-Visualizations-Medium)
 
+
+def twospirals(n_points, noise=.5):
+    #Code from tutorial at https://glowingpython.blogspot.com/2017/04/solving-two-spirals-problem-with-keras.html
+
+    """
+     Returns the two spirals dataset.
+    """
+    n = np.sqrt(np.random.rand(n_points,1)) * 780 * (2*np.pi)/360
+    d1x = -np.cos(n)*n + np.random.rand(n_points,1) * noise
+    d1y = np.sin(n)*n + np.random.rand(n_points,1) * noise
+
+    x = np.vstack((np.hstack((d1x,d1y)),np.hstack((-d1x,-d1y))))
+    labels = (np.hstack((np.zeros(n_points),np.ones(n_points))))
+    # labels = np.hstack((np.full(n_points, False, dtype=bool),np.full(n_points, True, dtype=bool)))
+    y = np.transpose(np.asarray((labels==0, labels==1)))
+
+    # print(y[0:5])
+
+    # for_shuffle = list(zip(x, y))
+    # np.random.shuffle(for_shuffle)
+    # x, y = zip(*for_shuffle)
+
+    # print(y[0:5])
+
+    return x,y
+
+
+
 def generate_toy_data(data_size, data_set, noise=None):
 
     if data_set == 'linear':
@@ -50,6 +78,12 @@ def generate_toy_data(data_size, data_set, noise=None):
         one_hot_labels = np.transpose(np.asarray((np.sqrt(np.square(x_data[:,0]) + np.square(x_data[:,1])) < 2, 
             np.sqrt(np.square(x_data[:,0]) + np.square(x_data[:,1])) > 2)))
 
+    elif data_set == 'spiral':
+
+        if noise == None:
+            noise=0.0
+
+        x_data, one_hot_labels = twospirals(data_size, noise=noise)
 
     return x_data, one_hot_labels
 
@@ -102,21 +136,21 @@ def BindingMLP_predictions(x_input, dropout_rate_placeholder, weights, biases, d
     layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
     layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
 
-    binding_layer = gradient_unpooling_sequence(layer_2, layer_1, low_flat_shape=[-1,dynamic_dic['binding_width']])
+    binding_layer = gradient_unpooling_sequence(layer_2, layer_1, low_flat_shape=[-1,dynamic_dic['binding_width']], k_sparsity=dynamic_dic['k_sparsity'])
 
     logits = tf.nn.bias_add(tf.add(tf.matmul(layer_2, weights['w3']), 
         tf.matmul(binding_layer, weights['w1_binding'])), biases['b3'])
 
     return logits, {}, {}, 0.0, 0.0
 
-def gradient_unpooling_sequence(high_level, low_level, low_flat_shape):
+def gradient_unpooling_sequence(high_level, low_level, low_flat_shape, k_sparsity):
 
     #Extract binding information for low-level neurons that are driving critical (i.e. max-pooled) mid-level neurons
     binding_grad = tf.squeeze(tf.gradients(high_level, low_level, unconnected_gradients=tf.UnconnectedGradients.ZERO), 0) #Squeeze removes the dimension of the gradient tensor that stores dtype
     binding_grad_flat = tf.reshape(binding_grad, low_flat_shape)
 
     #Use k-th largest value as a threshold for getting a boolean mask
-    values, _ = tf.math.top_k(binding_grad_flat, k=round(low_flat_shape[1]*0.25))
+    values, _ = tf.math.top_k(binding_grad_flat, k=round(low_flat_shape[1]*k_sparsity))
     kth = tf.reduce_min(values, axis=1)
     mask = tf.greater_equal(binding_grad_flat, tf.expand_dims(kth, -1))
     low_level_flat = tf.reshape(low_level, low_flat_shape) 
@@ -139,7 +173,7 @@ def train_toy(x_placeholder, y_placeholder, dropout_rate_placeholder, training_d
     correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-    optimizer=tf.compat.v1.train.AdamOptimizer(learning_rate=0.1).minimize(cost)
+    optimizer=tf.compat.v1.train.AdamOptimizer(learning_rate=model_params['learning_rate']).minimize(cost)
 
     saver = tf.compat.v1.train.Saver(var_list)
 
@@ -177,16 +211,6 @@ def train_toy(x_placeholder, y_placeholder, dropout_rate_placeholder, training_d
 
         return training_acc, testing_acc, mesh_pred, test_pred, data_pred
 
-
-def visualize_data(data, labels):
-    
-    
-    plt.scatter(data[:, 0][np.where(labels[:,0]==1)], data[:,1][np.where(labels[:,0]==1)], color='dodgerblue')
-    plt.scatter(data[:, 0][np.where(labels[:,1]==1)], data[:,1][np.where(labels[:,1]==1)], color='crimson')
-    plt.savefig('visual.jpg')
-    plt.show()
-
-
 def create_mesh(matrix_2D, bound=.1, step=.02):
     """
     create_mesh will generate a mesh grid for a given matrix
@@ -214,9 +238,9 @@ def create_mesh(matrix_2D, bound=.1, step=.02):
 
 
 def plot_decision_boundaries(X_2D, targets, labels, X_test_, 
-                            mesh_pred, test_pred, data_pred,
-                             colormap_, labelmap_, network_iter, 
-                             step_=0.02, title_="", xlabel_="", ylabel_=""):
+                            mesh_pred, test_pred, data_pred, X_adver_, adver_pred,
+                             colormap_, colormap_adver_, labelmap_, network_iter, 
+                            step_=0.02, title_="", xlabel_="", ylabel_=""):
     """
     X_2D:        2D numpy array of all data (training and testing)
     targets:     array of target data (e.g 0's and 1's)
@@ -236,9 +260,11 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
     # create color vectors [assume targets are last index]
     colors = [colormap_[str(t)] for t in targets]
     colors_test_pred = [colormap_[str(p)] for p in test_pred]
+    colors_adver_pred = [colormap_adver_[str(p)] for p in adver_pred]
     colors_pred_data = [labelmap_[str(x)] for x in data_pred]
     colors_mesh = [colormap_[str(int(m))] for m in mesh_pred.ravel()]
-    
+
+
     """ Create ColumnDataSources  """
     source_data = ColumnDataSource(data=dict(X=X_2D[:,0], 
                                              Y=X_2D[:,1],
@@ -251,6 +277,10 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
                                                     Y_test=X_test_[:,1],
                                                     colors_test_pred=colors_test_pred))
 
+    source_adver = ColumnDataSource(data=dict(X_adver=X_adver_[:,0],
+                                                    Y_adver=X_adver_[:,1],
+                                                    colors_adver_pred=colors_adver_pred))
+
     source_mesh = ColumnDataSource(data=dict(mesh_x=mesh_[0].ravel(),
                                              mesh_y=mesh_[1].ravel(),
                                              colors_mesh=colors_mesh))    
@@ -262,9 +292,9 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
     p.yaxis.axis_label = ylabel_
 
     # plot all data
-    p_data = p.circle('X', 'Y', fill_color='colors',
-                  size=10, alpha=0.5, line_alpha=0, 
-                  source=source_data, name='Data')
+    # p_data = p.circle('X', 'Y', fill_color='colors',
+    #               size=10, alpha=0.5, line_alpha=0, 
+    #               source=source_data, name='Data')
     
     # plot thick outline around predictions on test data
     p_test = p.circle('X_test', 'Y_test', line_color='colors_test_pred',
@@ -276,6 +306,14 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
                size = 13, line_alpha=0, fill_alpha=0.05, 
                source=source_mesh)
     
+
+    #plot predictions on adversarial data
+    p_data = p.circle('X_adver', 'Y_adver', fill_color='colors_adver_pred',
+                  size=10, alpha=0.5, line_alpha=0, 
+                  source=source_adver)
+
+
+
     # add hovertool
     # hover_1 = HoverTool(names=['Data'], 
     #                     tooltips=[("truth", "@colors_legend"), ("prediction", "@colors_pred_data")], 
@@ -311,14 +349,16 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, all_resu
 
     x_placeholder, y_placeholder, dropout_rate_placeholder, weights, biases, var_list = toy_initializer(network_iter, model_params)
 
-    #visualize_data(training_data, training_labels)
 
     all_data = np.concatenate((training_data, testing_data), axis=0)
     all_labels = (np.concatenate((training_labels, testing_labels), axis=0)[:, 1]).astype(int)
 
     mesh_ = create_mesh(all_data, step=step)
 
-    training_acc, testing_acc, mesh_pred, test_pred, data_pred = train_toy(x_placeholder, y_placeholder, dropout_rate_placeholder, training_data, training_labels, testing_data, testing_labels, mesh_,
+
+
+    training_acc, testing_acc, mesh_pred, test_pred, data_pred = train_toy(x_placeholder, y_placeholder, 
+        dropout_rate_placeholder, training_data, training_labels, testing_data, testing_labels, mesh_,
      weights, biases, var_list, model_params, network_iter)
 
     iter_dic.update({'training_accuracy':float(training_acc), 'testing_accuracy':float(testing_acc)})
@@ -330,11 +370,13 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, all_resu
          raise NotImplementedError("Prediction function %s not implemented" % (model_params['architecture'] + '_predictions'))
 
 
-    iter_dic.update(carry_out_attacks(model_params=model_params, adversarial_params=adversarial_params, 
+    update_dic, adver_pred_dic, adver_data_dic = carry_out_attacks(model_params=model_params, adversarial_params=adversarial_params, 
         pred_function=pred_function, input_data=testing_data, input_labels=testing_labels, 
         x_placeholder=x_placeholder, var_list=var_list, weights=weights, biases=biases, 
         network_name_str=str(network_iter) + '_' + model_params['architecture'] + str(model_params['network_width']), 
-        iter_num=network_iter, dynamic_dic=model_params['dynamic_dic']))
+        iter_num=network_iter, dynamic_dic=model_params['dynamic_dic'])
+
+    iter_dic.update(update_dic)
 
     print("\n\nThe cumulative results are...\n")
     print(iter_dic)
@@ -344,34 +386,104 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, all_resu
     all_results_df.to_pickle('Results.pkl')
     all_results_df.to_csv('Results.csv')
 
+
+
     toy_colormap = {'0': 'red', '1': 'dodgerblue'} 
     toy_labelmap = {'0': 'negative', '1': 'positive'} 
     toy_labels = [toy_labelmap[str(x)] for x in all_labels]
 
+    adver_colormap = {'0': 'pink', '1': 'navy'} 
+
+    # print(testing_labels.shape)
+    # print(testing_data.shape)
+
+    # print(adver_pred_dic)
+    # print(adver_data_dic)
+
+    #Note that Carry_out_attacks will return a None (under class/prediction) and array of zeros where the attack
+    #was unsucessful; this is key to how tfCore_adversarial e.g. calculates distances, so rather than change this
+    #we use the locations of where an attack was unsuccessful to retrieve the original (true) label and x-data
+    #Note therefore that due to the label these will be clearly distinguishable from unaltered data that was misclassified
+    adver_pred_dic['FGSM'] = np.transpose(adver_pred_dic['FGSM'][0])
+
+    failed_adver_indices = np.nonzero(adver_pred_dic['FGSM'] == None)
+    # print(adver_pred_dic['FGSM'][0].shape)
+    # print(failed_adver_indices)
+    # print(np.shape(failed_adver_indices))
+    # print(testing_labels[failed_adver_indices].shape)
+    # print(adver_pred_dic['FGSM'][failed_adver_indices].shape)
+    # print(testing_labels[failed_adver_indices])
+    # print(adver_pred_dic['FGSM'][failed_adver_indices])
+
+    print(np.shape(testing_labels))
+    print(testing_labels[0:5])
+    # print(testing_labels[0:5, 1])
+    # print(np.shape(testing_labels[:,1]==1))
+
+    # print(testing_labels[0:5,1]==1)
+    # print(failed_adver_indices[0])
+
+    # print(adver_pred_dic['FGSM'])
+    # print(adver_data_dic['FGSM'])
+
+    adver_pred_dic['FGSM'][failed_adver_indices] = ((testing_labels[:,1]==1)[failed_adver_indices]).astype(int)
+    adver_data_dic['FGSM'][failed_adver_indices, :] = testing_data[failed_adver_indices, :]
+
+    # print("\n")
+
+    # print(adver_pred_dic['FGSM'])
+    # print(adver_data_dic['FGSM'])
+
+    #adver_pred_dic['FGSM'] = to_categorical(adver_pred_dic['FGSM'])
+
+    # print(adver_pred_dic['FGSM'])
+    # print(adver_data_dic)
+
+    adver_pred = adver_pred_dic['FGSM']
+    adver_data = adver_data_dic['FGSM']
+
+    # print(test_pred.shape)
+    # print(adver_pred.shape)
+
+    # print(test_pred[0:5])
+    # print(adver_pred[0:5])
+
+    #Plot test samples on decision boundary
     plot_decision_boundaries(X_2D=all_data, targets=all_labels, labels=toy_labels, X_test_=testing_data, 
-                            mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred,
-                             step_=step, colormap_=toy_colormap, labelmap_=toy_labelmap, network_iter=network_iter)
+                            mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data, 
+                            adver_pred=adver_pred,
+                             step_=step, colormap_=toy_colormap, colormap_adver_=adver_colormap,
+                              labelmap_=toy_labelmap, network_iter=network_iter)
 
     return all_results_df
 
 if __name__ == '__main__':
 
+
+    #k_sparsity determines what percentage of the k-largest gradients have a 1 rather than a 0 in their
+    # associated boolean mask; i.e. 1.0 corresponds to using all binding information, whereas e.g. 0.25
+    # corresponds to just up-projecting the activations associated with the highest 25% of gradients
+    # 0.0 would correspond to no binding (i.e. the activations of the binding neurons are always 0)
+
+
     model_params = {
     'architecture' : 'MLP',
-    'network_width' : 8,
-    'dynamic_dic' : {'binding_width': 8},
-    'training_epochs' : 50,
-    'Gaussian_noise' : 0.3,
-    'smoothing_coefficient' : 0.01,
+    'network_width' : 256,
+    'learning_rate' : 0.01,
+    'dynamic_dic' : {'binding_width': 256,
+                        'k_sparsity': 0.25},
+    'training_epochs' : 100,
+    'Gaussian_noise' : 0.0,
+    'smoothing_coefficient' : 0.0,
     'step' : 0.01,
-    'data_set' : 'circle',
-    'num_networks' : 20,
-    'data_size' : 5000,
-    'batch_size' : 128
+    'data_set' : 'spiral',
+    'num_networks' : 1,
+    'data_size' : 100000,
+    'batch_size' : 100000
     }
 
     adversarial_params = {
-        'num_attack_examples':128,
+        'num_attack_examples':25,
         'transfer_attack_setup':False,
         'estimate_gradients':False,
         'boundary_attack_iterations':100,
