@@ -46,7 +46,7 @@ def twospirals(n_points, noise=.5):
 
 
 
-def generate_toy_data(data_size, data_set, noise=None):
+def generate_toy_data(data_size, data_set, data_set_input_dimension, noise=None):
 
     if data_set == 'linear':
 
@@ -73,7 +73,7 @@ def generate_toy_data(data_size, data_set, noise=None):
                 size=np.shape(x_data))
 
         np.random.shuffle(x_data)
-        
+
         #Not efficient label generation but useful sanity check
         one_hot_labels = np.transpose(np.asarray((np.sqrt(np.square(x_data[:,0]) + np.square(x_data[:,1])) < 2, 
             np.sqrt(np.square(x_data[:,0]) + np.square(x_data[:,1])) > 2)))
@@ -91,7 +91,7 @@ def toy_initializer(network_iter, model_params):
     
     tf.reset_default_graph()
 
-    x_placeholder = tf.compat.v1.placeholder(tf.float32, [None, 2])
+    x_placeholder = tf.compat.v1.placeholder(tf.float32, [None, model_params['data_set_input_dimension']])
     y_placeholder = tf.compat.v1.placeholder(tf.int32, [None, 2])
     dropout_rate_placeholder = tf.compat.v1.placeholder(tf.float32)
 
@@ -99,20 +99,22 @@ def toy_initializer(network_iter, model_params):
 
     with tf.name_scope('Network_' + str(network_iter)):
         weights = {
-            'w1' : tf.compat.v1.get_variable('w1', shape=(2,model_params['network_width']), initializer=initializer),
+            'w1' : tf.compat.v1.get_variable('w1', shape=(model_params['data_set_input_dimension'],model_params['network_width']), initializer=initializer),
             'w2' : tf.compat.v1.get_variable('w2', shape=(model_params['network_width'],model_params['network_width']), initializer=initializer),
+            'w2b' : tf.compat.v1.get_variable('w2b', shape=(model_params['network_width'],model_params['network_width']), initializer=initializer),
             'w3' : tf.compat.v1.get_variable('w3', shape=(model_params['network_width'],2), initializer=initializer)
         }
 
         biases = {
             'b1' : tf.compat.v1.get_variable('b1', shape=(model_params['network_width']), initializer=initializer),
             'b2' : tf.compat.v1.get_variable('b2', shape=(model_params['network_width']), initializer=initializer),
+            'b2b' : tf.compat.v1.get_variable('b2b', shape=(model_params['network_width']), initializer=initializer),
             'b3' : tf.compat.v1.get_variable('b3', shape=(2), initializer=initializer)
         }
 
-    var_list = [weights['w1'], weights['w2'], weights['w3'], biases['b1'], biases['b2'], biases['b3']]
+    var_list = [weights['w1'], weights['w2'], weights['w2b'], weights['w3'], biases['b1'], biases['b2'], biases['b2b'], biases['b3']]
 
-    if (model_params['architecture'] == 'BindingMLP'):
+    if ('BindingMLP' in model_params['architecture']):
         weights['w1_binding'] = tf.compat.v1.get_variable('w1_binding', shape=(model_params['network_width'], 2), initializer=initializer)
 
         var_list.append(weights['w1_binding'])
@@ -120,7 +122,7 @@ def toy_initializer(network_iter, model_params):
 
     return x_placeholder, y_placeholder, dropout_rate_placeholder, weights, biases, var_list
 
-def MLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
+def shallow_MLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
     layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
     layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
@@ -131,7 +133,19 @@ def MLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_
 
     return logits, {}, {}, 0.0, 0.0
 
-def BindingMLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
+def deep_MLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
+
+    layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
+    layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
+    layer_3 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_2, weights['w2b']), biases['b2b']))
+
+    logits = tf.nn.bias_add(tf.matmul(layer_3, weights['w3']), biases['b3'])
+
+    dummy = {}
+
+    return logits, {}, {}, 0.0, 0.0
+
+def shallow_BindingMLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
     layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
     layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
@@ -140,6 +154,21 @@ def BindingMLP_predictions(x_input, dropout_rate_placeholder, weights, biases, d
 
     logits = tf.nn.bias_add(tf.add(tf.matmul(layer_2, weights['w3']), 
         tf.matmul(binding_layer, weights['w1_binding'])), biases['b3'])
+
+    return logits, {}, {}, 0.0, 0.0
+
+def deep_BindingMLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
+
+    layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
+    layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
+    layer_3 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_2, weights['w2b']), biases['b2b']))
+
+    binding_layer = gradient_unpooling_sequence(layer_3, layer_2, low_flat_shape=[-1,dynamic_dic['binding_width']], k_sparsity=dynamic_dic['k_sparsity'])
+
+    logits = tf.nn.bias_add(tf.add(tf.matmul(layer_3, weights['w3']), 
+        tf.matmul(binding_layer, weights['w1_binding'])), biases['b3'])
+
+    dummy = {}
 
     return logits, {}, {}, 0.0, 0.0
 
@@ -158,15 +187,10 @@ def gradient_unpooling_sequence(high_level, low_level, low_flat_shape, k_sparsit
 
     return gradient_unpool_binding_activations
 
-def train_toy(x_placeholder, y_placeholder, dropout_rate_placeholder, training_data, training_labels, 
+def train_toy(pred_function, x_placeholder, y_placeholder, dropout_rate_placeholder, training_data, training_labels, 
         testing_data, testing_labels, mesh, weights, biases, var_list, model_params, network_iter):
     
-    if model_params['architecture'] == 'MLP':
-        print("\nTraining standard MLP")
-        predictions, _, _, _, _ = MLP_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, model_params['dynamic_dic'])
-    elif model_params['architecture'] == 'BindingMLP':
-        print("\nTraining Binding MLP")
-        predictions, _, _, _, _ = BindingMLP_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, dynamic_dic=model_params['dynamic_dic'])
+    predictions, _, _, _, _ = pred_function(x_placeholder, dropout_rate_placeholder, weights, biases, model_params['dynamic_dic'])
 
     cost = tf.reduce_mean(tf.compat.v1.losses.sigmoid_cross_entropy(logits=predictions, 
         multi_class_labels=y_placeholder, label_smoothing=model_params['smoothing_coefficient']))
@@ -196,7 +220,7 @@ def train_toy(x_placeholder, y_placeholder, dropout_rate_placeholder, training_d
         save_path = saver.save(sess, "network_weights_data/" + str(network_iter) + '_' + model_params['architecture'] + str(model_params['network_width']) + ".ckpt")
 
         # Get predictions for each point in the mesh
-        mesh_pred = sess.run(predictions, feed_dict = {x_placeholder: np.c_[mesh[0].ravel(), mesh[1].ravel()], dropout_rate_placeholder: None, })
+        mesh_pred = sess.run(predictions, feed_dict = {x_placeholder: mesh, dropout_rate_placeholder: None, })
         
         # Get predictions for test data, and for all data
         test_pred = sess.run(predictions, feed_dict = {x_placeholder: testing_data, dropout_rate_placeholder: None, })
@@ -325,20 +349,7 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
 
     return
 
-def generate_toy_visual(model_params, adversarial_params, network_iter, all_results_df):
-
-    iter_dic = {}
-
-    data_size = model_params['data_size']
-    step = model_params['step']
-    data_set = model_params['data_set']
-
-    training_data, training_labels = generate_toy_data(data_size, data_set, noise=model_params['Gaussian_noise'])
-
-    #smooth_training_labels = label_smoothing(training_labels, model_params['smoothing_coefficient'])
-
-    testing_data, testing_labels = generate_toy_data(data_size, data_set, noise=None)
-
+def normalize(training_data, testing_data):
     #Normalize data, accounting for larger values in training data if noise added
     data_min = np.minimum(np.amin(training_data, axis=0), np.amin(testing_data, axis=0))
     data_max = np.maximum(np.amax(training_data, axis=0), np.amax(testing_data, axis=0))
@@ -346,22 +357,39 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, all_resu
     training_data = (training_data - data_min)/(data_max - data_min)
     testing_data = (testing_data - data_min)/(data_max - data_min)
 
+    return training_data, testing_data
+
+def dimension_agument(model_params, x_data):
+
+    x_data = np.concatenate((x_data, np.zeros((np.shape(x_data)[0], 
+        model_params['data_set_input_dimension']-2))), axis=1)
+
+    return x_data
+
+
+def generate_toy_visual(model_params, adversarial_params, network_iter, all_results_df):
+
+    iter_dic = {} #Store results 
+
+    training_data, training_labels = generate_toy_data(model_params['data_size'], model_params['data_set'], model_params['data_set_input_dimension'], noise=model_params['Gaussian_noise'])
+    testing_data, testing_labels = generate_toy_data(model_params['data_size'], model_params['data_set'], model_params['data_set_input_dimension'], noise=None)
+
+    training_data, testing_data = normalize(training_data, testing_data)
 
     x_placeholder, y_placeholder, dropout_rate_placeholder, weights, biases, var_list = toy_initializer(network_iter, model_params)
 
 
-    all_data = np.concatenate((training_data, testing_data), axis=0)
-    all_labels = (np.concatenate((training_labels, testing_labels), axis=0)[:, 1]).astype(int)
+    #Note mesh data for plotting (rather than predictions) is *not* expanded beyond the two non-zero dimensions of for the input, in order to enable visualization
+    mesh_all_data = np.concatenate((training_data, testing_data), axis=0)
+    mesh_all_labels = (np.concatenate((training_labels, testing_labels), axis=0)[:, 1]).astype(int)
 
-    mesh_ = create_mesh(all_data, step=step)
+    mesh_ = create_mesh(mesh_all_data, step=model_params['step'])
 
-
-
-    training_acc, testing_acc, mesh_pred, test_pred, data_pred = train_toy(x_placeholder, y_placeholder, 
-        dropout_rate_placeholder, training_data, training_labels, testing_data, testing_labels, mesh_,
-     weights, biases, var_list, model_params, network_iter)
-
-    iter_dic.update({'training_accuracy':float(training_acc), 'testing_accuracy':float(testing_acc)})
+    # Create the additional zero-valued, d-2 dimensional data to assess the effect of co-dimension (see Khoury, 2019 et al)
+    # These features are *always* included when the network is making predictions (train, test, adversarial)
+    training_data = dimension_agument(model_params, training_data)
+    testing_data = dimension_agument(model_params, testing_data)
+    mesh_ = dimension_agument(model_params, np.c_[mesh_[0].ravel(), mesh_[1].ravel()])
 
     functions = globals().copy()
     functions.update(locals())
@@ -369,6 +397,11 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, all_resu
     if not pred_function:
          raise NotImplementedError("Prediction function %s not implemented" % (model_params['architecture'] + '_predictions'))
 
+    training_acc, testing_acc, mesh_pred, test_pred, data_pred = train_toy(pred_function, x_placeholder, y_placeholder, 
+        dropout_rate_placeholder, training_data, training_labels, testing_data, testing_labels, mesh_,
+     weights, biases, var_list, model_params, network_iter)
+
+    iter_dic.update({'training_accuracy':float(training_acc), 'testing_accuracy':float(testing_acc)})
 
     update_dic, adver_pred_dic, adver_data_dic = carry_out_attacks(model_params=model_params, adversarial_params=adversarial_params, 
         pred_function=pred_function, input_data=testing_data, input_labels=testing_labels, 
@@ -387,72 +420,29 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, all_resu
     all_results_df.to_csv('Results.csv')
 
 
-
     toy_colormap = {'0': 'red', '1': 'dodgerblue'} 
     toy_labelmap = {'0': 'negative', '1': 'positive'} 
-    toy_labels = [toy_labelmap[str(x)] for x in all_labels]
+    toy_labels = [toy_labelmap[str(x)] for x in mesh_all_labels]
 
     adver_colormap = {'0': 'pink', '1': 'navy'} 
 
-    # print(testing_labels.shape)
-    # print(testing_data.shape)
-
-    # print(adver_pred_dic)
-    # print(adver_data_dic)
-
     #Note that Carry_out_attacks will return a None (under class/prediction) and array of zeros where the attack
     #was unsucessful; this is key to how tfCore_adversarial e.g. calculates distances, so rather than change this
-    #we use the locations of where an attack was unsuccessful to retrieve the original (true) label and x-data
+    #we use the locations of where an attack was unsuccessful to retrieve the original (true) label and the associated input features-data
     #Note therefore that due to the label these will be clearly distinguishable from unaltered data that was misclassified
     adver_pred_dic['FGSM'] = np.transpose(adver_pred_dic['FGSM'][0])
-
     failed_adver_indices = np.nonzero(adver_pred_dic['FGSM'] == None)
-    # print(adver_pred_dic['FGSM'][0].shape)
-    # print(failed_adver_indices)
-    # print(np.shape(failed_adver_indices))
-    # print(testing_labels[failed_adver_indices].shape)
-    # print(adver_pred_dic['FGSM'][failed_adver_indices].shape)
-    # print(testing_labels[failed_adver_indices])
-    # print(adver_pred_dic['FGSM'][failed_adver_indices])
-
-    print(np.shape(testing_labels))
-    print(testing_labels[0:5])
-    # print(testing_labels[0:5, 1])
-    # print(np.shape(testing_labels[:,1]==1))
-
-    # print(testing_labels[0:5,1]==1)
-    # print(failed_adver_indices[0])
-
-    # print(adver_pred_dic['FGSM'])
-    # print(adver_data_dic['FGSM'])
 
     adver_pred_dic['FGSM'][failed_adver_indices] = ((testing_labels[:,1]==1)[failed_adver_indices]).astype(int)
     adver_data_dic['FGSM'][failed_adver_indices, :] = testing_data[failed_adver_indices, :]
-
-    # print("\n")
-
-    # print(adver_pred_dic['FGSM'])
-    # print(adver_data_dic['FGSM'])
-
-    #adver_pred_dic['FGSM'] = to_categorical(adver_pred_dic['FGSM'])
-
-    # print(adver_pred_dic['FGSM'])
-    # print(adver_data_dic)
-
     adver_pred = adver_pred_dic['FGSM']
     adver_data = adver_data_dic['FGSM']
 
-    # print(test_pred.shape)
-    # print(adver_pred.shape)
-
-    # print(test_pred[0:5])
-    # print(adver_pred[0:5])
-
     #Plot test samples on decision boundary
-    plot_decision_boundaries(X_2D=all_data, targets=all_labels, labels=toy_labels, X_test_=testing_data, 
+    plot_decision_boundaries(X_2D=mesh_all_data, targets=mesh_all_labels, labels=toy_labels, X_test_=testing_data, 
                             mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data, 
                             adver_pred=adver_pred,
-                             step_=step, colormap_=toy_colormap, colormap_adver_=adver_colormap,
+                             step_=model_params['step'], colormap_=toy_colormap, colormap_adver_=adver_colormap,
                               labelmap_=toy_labelmap, network_iter=network_iter)
 
     return all_results_df
@@ -467,23 +457,24 @@ if __name__ == '__main__':
 
 
     model_params = {
-    'architecture' : 'MLP',
-    'network_width' : 256,
-    'learning_rate' : 0.01,
-    'dynamic_dic' : {'binding_width': 256,
+    'architecture' : 'shallow_BindingMLP',
+    'network_width' : 8,
+    'data_set_input_dimension':3,
+    'learning_rate' : 0.1,
+    'dynamic_dic' : {'binding_width': 8,
                         'k_sparsity': 0.25},
-    'training_epochs' : 100,
-    'Gaussian_noise' : 0.0,
-    'smoothing_coefficient' : 0.0,
+    'training_epochs' : 50,
+    'Gaussian_noise' : 0.3,
+    'smoothing_coefficient' : 0.1,
     'step' : 0.01,
-    'data_set' : 'spiral',
+    'data_set' : 'circle',
     'num_networks' : 1,
-    'data_size' : 100000,
-    'batch_size' : 100000
+    'data_size' : 10000,
+    'batch_size' : 10000
     }
 
     adversarial_params = {
-        'num_attack_examples':25,
+        'num_attack_examples':256,
         'transfer_attack_setup':False,
         'estimate_gradients':False,
         'boundary_attack_iterations':100,
