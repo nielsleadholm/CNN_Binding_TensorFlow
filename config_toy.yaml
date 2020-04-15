@@ -1,0 +1,35 @@
+--- 
+  #k_sparsity determines what percentage of the k-largest gradients have a 1 rather than a 0 in their
+  # associated boolean mask; i.e. 1.0 corresponds to using all binding information, whereas e.g. 0.25
+  # corresponds to just up-projecting the activations associated with the highest 25% of gradients
+  # 0.0 would correspond to no binding (i.e. the activations of the binding neurons are always 0)
+  # 1.0 corresponds to the 'control binding' NN (i.e. all information is up-projected)
+ model_params:
+  architecture : 'deep_BindingMLP' #options are shallow/deep and MLP or BindingMLP
+  network_width : 64
+  data_set_input_dimension : 3
+  learning_rate : 0.1
+  dynamic_dic : 
+    binding_width: 256
+    k_sparsity: 1.0
+  training_epochs : 300
+  Gaussian_noise : 0.0
+  smoothing_coefficient : 0.0
+  step : 0.01
+  data_set : 'spiral'
+  num_networks : 1
+  data_size : 10000
+  batch_size : 128
+  
+
+ adversarial_params :
+  num_attack_examples : 2
+  transfer_attack_setup : False
+  estimate_gradients : False
+  boundary_attack_iterations : 100
+  boundary_attack_log_steps : 100
+  perturbation_threshold : 
+    L0 : 12
+    LInf : 0.3
+    L2 : 1.5
+  save_images : False

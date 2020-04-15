@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 
-import tensorflow as tf
 import numpy as np
 import math
+import os
 import pandas as pd
+import yaml
+import tensorflow as tf
 from keras.utils import to_categorical
 import matplotlib.pyplot as plt
 from bokeh.plotting import output_notebook, figure, show
 from bokeh.models import ColumnDataSource
 from bokeh.io import export_png, save
-import os
 from Systematic_resistance_evaluation import carry_out_attacks
 
 
@@ -34,13 +35,14 @@ def twospirals(n_points, noise=.5):
     # labels = np.hstack((np.full(n_points, False, dtype=bool),np.full(n_points, True, dtype=bool)))
     y = np.transpose(np.asarray((labels==0, labels==1)))
 
-    # print(y[0:5])
+    #Randomize data-sample orders
+    for_shuffle = list(zip(x, y))
+    np.random.shuffle(for_shuffle)
+    x, y = zip(*for_shuffle)
 
-    # for_shuffle = list(zip(x, y))
-    # np.random.shuffle(for_shuffle)
-    # x, y = zip(*for_shuffle)
+    #Get y back to an np array
+    y = np.array(list(map(list, y)))
 
-    # print(y[0:5])
 
     return x,y
 
@@ -449,39 +451,16 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, all_resu
 
 if __name__ == '__main__':
 
+    with open('config_toy.yaml') as f:
+        params = yaml.load(f, Loader=yaml.FullLoader)
 
-    #k_sparsity determines what percentage of the k-largest gradients have a 1 rather than a 0 in their
-    # associated boolean mask; i.e. 1.0 corresponds to using all binding information, whereas e.g. 0.25
-    # corresponds to just up-projecting the activations associated with the highest 25% of gradients
-    # 0.0 would correspond to no binding (i.e. the activations of the binding neurons are always 0)
+    model_params = params['model_params']
+    model_params['dynamic_dic']['binding_width'] = model_params['network_width']
 
+    adversarial_params = params['adversarial_params']
 
-    model_params = {
-    'architecture' : 'shallow_BindingMLP',
-    'network_width' : 8,
-    'data_set_input_dimension':3,
-    'learning_rate' : 0.1,
-    'dynamic_dic' : {'binding_width': 8,
-                        'k_sparsity': 0.25},
-    'training_epochs' : 50,
-    'Gaussian_noise' : 0.3,
-    'smoothing_coefficient' : 0.1,
-    'step' : 0.01,
-    'data_set' : 'circle',
-    'num_networks' : 1,
-    'data_size' : 10000,
-    'batch_size' : 10000
-    }
-
-    adversarial_params = {
-        'num_attack_examples':256,
-        'transfer_attack_setup':False,
-        'estimate_gradients':False,
-        'boundary_attack_iterations':100,
-        'boundary_attack_log_steps':100,
-        'perturbation_threshold':{'L0':12, 'LInf':0.3,  'L2':1.5},
-        'save_images':False
-        }
+    print(model_params)
+    print(adversarial_params)
 
     all_results_df=pd.DataFrame({})
 
