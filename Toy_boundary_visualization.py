@@ -9,7 +9,7 @@ import tensorflow as tf
 from keras.utils import to_categorical
 import matplotlib.pyplot as plt
 from bokeh.plotting import output_notebook, figure, show
-from bokeh.models import ColumnDataSource
+from bokeh.models import ColumnDataSource, Segment
 from bokeh.io import export_png, save
 from Systematic_resistance_evaluation import carry_out_attacks
 
@@ -18,7 +18,6 @@ from Systematic_resistance_evaluation import carry_out_attacks
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' 
 
 #Boundary visualization code from Data Visualizations tutorial by Gaurav-Kaushik (https://github.com/gaurav-kaushik/Data-Visualizations-Medium)
-
 
 def twospirals(n_points, noise=.5):
     #Code from tutorial at https://glowingpython.blogspot.com/2017/04/solving-two-spirals-problem-with-keras.html
@@ -48,7 +47,7 @@ def twospirals(n_points, noise=.5):
 
 
 
-def generate_toy_data(data_size, data_set, data_set_input_dimension, noise=None):
+def generate_toy_data(data_size, data_set, data_set_input_dimension, training_data_bool, noise=None):
 
     if data_set == 'linear':
 
@@ -60,12 +59,13 @@ def generate_toy_data(data_size, data_set, data_set_input_dimension, noise=None)
         radius_2 = 3
 
         #Uniform distribution of angle
-        uniform = np.random.uniform(low=0, high=2*math.pi, size=(data_size, 2))
+        uniform_inner = np.random.uniform(low=0, high=2*math.pi, size=(int(data_size/2), 2))
+        uniform_outer = np.random.uniform(low=0, high=2*math.pi, size=(int(data_size/2), 2))
 
         #Identify cartesian coordinates given desired radius
-        inner_circle = np.asarray((radius_1*np.cos(uniform[:,0]), radius_1*np.sin(uniform[:,0])))
+        inner_circle = np.asarray((radius_1*np.cos(uniform_inner[:,0]), radius_1*np.sin(uniform_inner[:,0])))
 
-        outer_circle = np.asarray((radius_2*np.cos(uniform[:,0]), radius_2*np.sin(uniform[:,0])))
+        outer_circle = np.asarray((radius_2*np.cos(uniform_outer[:,0]), radius_2*np.sin(uniform_outer[:,0])))
      
         x_data = np.transpose(np.concatenate((inner_circle, outer_circle), axis=1))
 
@@ -74,7 +74,8 @@ def generate_toy_data(data_size, data_set, data_set_input_dimension, noise=None)
             x_data = x_data + np.random.normal(0, scale=noise, 
                 size=np.shape(x_data))
 
-        np.random.shuffle(x_data)
+        if training_data_bool == True:
+            np.random.shuffle(x_data)
 
         #Not efficient label generation but useful sanity check
         one_hot_labels = np.transpose(np.asarray((np.sqrt(np.square(x_data[:,0]) + np.square(x_data[:,1])) < 2, 
@@ -265,7 +266,7 @@ def create_mesh(matrix_2D, bound=.1, step=.02):
 
 def plot_decision_boundaries(X_2D, targets, labels, X_test_, 
                             mesh_pred, test_pred, data_pred, X_adver_, adver_pred,
-                             colormap_, colormap_adver_, labelmap_, network_iter, 
+                             colormap_, colormap_adver_, labelmap_, network_iter, boundary_iter,
                             step_=0.02, title_="", xlabel_="", ylabel_=""):
     """
     X_2D:        2D numpy array of all data (training and testing)
@@ -310,7 +311,31 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
     source_mesh = ColumnDataSource(data=dict(mesh_x=mesh_[0].ravel(),
                                              mesh_y=mesh_[1].ravel(),
                                              colors_mesh=colors_mesh))    
+
+    print("Half-value")
+    half=int(len(X_test_)/2)
+    print(half)
     
+    if boundary_iter == 0:
+        segment_color='navy'
+        source_adver_shift = ColumnDataSource(data=dict(
+            x=X_adver_[:,0],
+            y=X_adver_[:,1],
+            xm01=X_test_[:half,0],
+            ym01=X_test_[:half,1]
+        )
+    )
+    else:
+        segment_color='pink'
+        source_adver_shift = ColumnDataSource(data=dict(
+            x=X_adver_[:,0],
+            y=X_adver_[:,1],
+            xm01=X_test_[half:,0],
+            ym01=X_test_[half:,1]
+        )
+    )
+
+
     # Initiate Plot
     tools_ = ['crosshair', 'zoom_in', 'zoom_out', 'save', 'reset', 'tap', 'box_zoom']
     p = figure(title=title_, tools=tools_)
@@ -324,8 +349,8 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
     
     # plot thick outline around predictions on test data
     p_test = p.circle('X_test', 'Y_test', line_color='colors_test_pred',
-                  size=12, alpha=1, line_width=3, fill_alpha=0,
-                  source=source_test)
+                  size=8, alpha=0.75, line_width=3, fill_alpha=0,
+                  source=source_test, legend_label='Test Data')
 
     # plot mesh
     p_mesh = p.square('mesh_x', 'mesh_y', fill_color='colors_mesh',
@@ -335,9 +360,12 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
 
     #plot predictions on adversarial data
     p_data = p.circle('X_adver', 'Y_adver', fill_color='colors_adver_pred',
-                  size=10, alpha=0.5, line_alpha=0, 
-                  source=source_adver)
+                  size=12, alpha=0.75, line_alpha=0, 
+                  source=source_adver, legend_label='Adversarial Images')
 
+
+    adver_shift = Segment(x0="x", y0="y", x1="xm01", y1="ym01", line_color=segment_color, line_width=3)
+    p.add_glyph(source_adver_shift, adver_shift)
 
 
     # add hovertool
@@ -347,7 +375,7 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
     # p.add_tools(hover_1)
 
     #show(p)
-    save(obj=p, filename='./Boundary_visual_' + str(network_iter) + '.html', title="Decision_boundary")
+    save(obj=p, filename='./Boundary_visual_' + str(network_iter) + 'boundary_' + str(boundary_iter) + '.html', title="Decision_boundary")
 
     return
 
@@ -369,12 +397,14 @@ def dimension_agument(model_params, x_data):
     return x_data
 
 
-def generate_toy_visual(model_params, adversarial_params, network_iter, all_results_df):
+def generate_toy_visual(model_params, adversarial_params, network_iter, attack_for_visual, all_results_df):
 
     iter_dic = {} #Store results 
 
-    training_data, training_labels = generate_toy_data(model_params['data_size'], model_params['data_set'], model_params['data_set_input_dimension'], noise=model_params['Gaussian_noise'])
-    testing_data, testing_labels = generate_toy_data(model_params['data_size'], model_params['data_set'], model_params['data_set_input_dimension'], noise=None)
+    training_data, training_labels = generate_toy_data(model_params['data_size'], model_params['data_set'], 
+        model_params['data_set_input_dimension'], training_data_bool=True, noise=model_params['Gaussian_noise'])
+    testing_data, testing_labels = generate_toy_data(adversarial_params['num_attack_examples'], model_params['data_set'], 
+        model_params['data_set_input_dimension'], training_data_bool=False, noise=None)
 
     training_data, testing_data = normalize(training_data, testing_data)
 
@@ -411,6 +441,8 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, all_resu
         network_name_str=str(network_iter) + '_' + model_params['architecture'] + str(model_params['network_width']), 
         iter_num=network_iter, dynamic_dic=model_params['dynamic_dic'])
 
+    print(np.shape(adver_pred_dic[attack_for_visual]))
+
     iter_dic.update(update_dic)
 
     print("\n\nThe cumulative results are...\n")
@@ -432,20 +464,40 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, all_resu
     #was unsucessful; this is key to how tfCore_adversarial e.g. calculates distances, so rather than change this
     #we use the locations of where an attack was unsuccessful to retrieve the original (true) label and the associated input features-data
     #Note therefore that due to the label these will be clearly distinguishable from unaltered data that was misclassified
-    adver_pred_dic['FGSM'] = np.transpose(adver_pred_dic['FGSM'][0])
-    failed_adver_indices = np.nonzero(adver_pred_dic['FGSM'] == None)
 
-    adver_pred_dic['FGSM'][failed_adver_indices] = ((testing_labels[:,1]==1)[failed_adver_indices]).astype(int)
-    adver_data_dic['FGSM'][failed_adver_indices, :] = testing_data[failed_adver_indices, :]
-    adver_pred = adver_pred_dic['FGSM']
-    adver_data = adver_data_dic['FGSM']
+    failed_adver_indices = np.nonzero(adver_pred_dic[attack_for_visual] == None)
+
+    print(np.shape(adver_pred_dic[attack_for_visual]))
+    print(adver_pred_dic[attack_for_visual])
+    print(np.shape(testing_labels))
+    print(failed_adver_indices)
+
+    adver_pred_dic[attack_for_visual][failed_adver_indices] = ((testing_labels[:,1]==1)[failed_adver_indices]).astype(int)
+    adver_data_dic[attack_for_visual][failed_adver_indices, :] = testing_data[failed_adver_indices, :]
+    adver_pred = adver_pred_dic[attack_for_visual]
+    adver_data = adver_data_dic[attack_for_visual]
+
+    half = int(adversarial_params['num_attack_examples']/2)
+
+    print(np.shape(test_pred))
+    print(np.shape(adver_pred))
+
+    print("\n *** adversarial predictions ***")
+    print(test_pred[0:20])
+    print(adver_pred[0:20])
 
     #Plot test samples on decision boundary
     plot_decision_boundaries(X_2D=mesh_all_data, targets=mesh_all_labels, labels=toy_labels, X_test_=testing_data, 
-                            mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data, 
-                            adver_pred=adver_pred,
+                            mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data[0:half], 
+                            adver_pred=adver_pred[0:half],
                              step_=model_params['step'], colormap_=toy_colormap, colormap_adver_=adver_colormap,
-                              labelmap_=toy_labelmap, network_iter=network_iter)
+                              labelmap_=toy_labelmap, network_iter=network_iter, boundary_iter=0)
+
+    plot_decision_boundaries(X_2D=mesh_all_data, targets=mesh_all_labels, labels=toy_labels, X_test_=testing_data, 
+                            mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data[half:], 
+                            adver_pred=adver_pred[half:],
+                             step_=model_params['step'], colormap_=toy_colormap, colormap_adver_=adver_colormap,
+                              labelmap_=toy_labelmap, network_iter=network_iter, boundary_iter=1)
 
     return all_results_df
 
@@ -454,6 +506,7 @@ if __name__ == '__main__':
     with open('config_toy.yaml') as f:
         params = yaml.load(f, Loader=yaml.FullLoader)
 
+    attack_for_visual = 'boundary'
     model_params = params['model_params']
     model_params['dynamic_dic']['binding_width'] = model_params['network_width']
 
@@ -466,4 +519,4 @@ if __name__ == '__main__':
 
     for network_iter in range(model_params['num_networks']):
 
-        all_results_df = generate_toy_visual(model_params, adversarial_params, network_iter, all_results_df)
+        all_results_df = generate_toy_visual(model_params, adversarial_params, network_iter, attack_for_visual, all_results_df)
