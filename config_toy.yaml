@@ -5,28 +5,29 @@
   # 0.0 would correspond to no binding (i.e. the activations of the binding neurons are always 0)
   # 1.0 corresponds to the 'control binding' NN (i.e. all information is up-projected)
  model_params:
-  architecture : 'deep_BindingMLP' #options are shallow/deep and MLP or BindingMLP
-  network_width : 64
-  data_set_input_dimension : 3
+  architecture : 'shallow_MLP' #options are shallow/deep, _, then MLP or BindingMLP
+  network_width : 8
+  additional_features_dimension : 10
+  additional_zero_dimensions : 10
   learning_rate : 0.1
   dynamic_dic : 
-    binding_width: 256
-    k_sparsity: 1.0
-  training_epochs : 300
+    binding_width: -1
+    k_sparsity: 0.25
+  training_epochs : 50
   Gaussian_noise : 0.0
   smoothing_coefficient : 0.0
-  step : 0.01
-  data_set : 'spiral'
-  num_networks : 1
-  data_size : 10000
+  step : 0.1
+  data_set : 'hyper_spheres'
+  num_networks : 5
+  data_size : 1000
   batch_size : 128
   
 
  adversarial_params :
-  num_attack_examples : 2
+  num_attack_examples : 128
   transfer_attack_setup : False
   estimate_gradients : False
-  boundary_attack_iterations : 100
+  boundary_attack_iterations : 50
   boundary_attack_log_steps : 100
   perturbation_threshold : 
     L0 : 12

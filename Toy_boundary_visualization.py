@@ -112,7 +112,7 @@ def generate_toy_data(data_size, data_set, additional_features_dimension, traini
 
         #Note the change in means and the use of additional_features_dimension
         imperfect_features_zero_class = np.random.normal(0, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
-        imperfect_features_one_class = np.random.normal(1, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
+        imperfect_features_one_class = np.random.normal(0.5, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
 
         #print(imperfect_features_zero_class.shape)
 
@@ -147,7 +147,7 @@ def toy_initializer(network_iter, model_params):
     
     tf.reset_default_graph()
 
-    input_dim = 2+2*model_params['additional_features_dimension']
+    input_dim = 2+model_params['additional_features_dimension']+model_params['additional_zero_dimensions']
 
     x_placeholder = tf.compat.v1.placeholder(tf.float32, [None, input_dim])
     y_placeholder = tf.compat.v1.placeholder(tf.int32, [None, 2])
@@ -446,10 +446,10 @@ def normalize(training_data, testing_data):
     return training_data, testing_data
 
 #Add additional (uninformative) feature dimensions
-def dimension_augment(model_params, x_data):
+def dimension_augment(dim, x_data):
 
     x_data = np.concatenate((x_data, np.zeros((np.shape(x_data)[0], 
-        model_params['additional_features_dimension']))), axis=1)
+        dim))), axis=1)
 
     return x_data
 
@@ -485,18 +485,18 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
 
     # Create the additional zero-valued, d-2 dimensional data to assess the effect of co-dimension (see Khoury, 2019 et al)
     # These features are *always* included when the network is making predictions (train, test, adversarial)
-    training_data = dimension_augment(model_params, training_data)
-    testing_data = dimension_augment(model_params, testing_data)
+    training_data = dimension_augment(model_params['additional_zero_dimensions'], training_data)
+    testing_data = dimension_augment(model_params['additional_zero_dimensions'], testing_data)
 
     print("Mesh shape is " + str(np.shape(mesh_)))
-    mesh_ = dimension_augment(model_params, np.c_[mesh_[0].ravel(), mesh_[1].ravel()])
+    mesh_ = dimension_augment(model_params['additional_zero_dimensions'], np.c_[mesh_[0].ravel(), mesh_[1].ravel()])
     print("Mesh shape is " + str(np.shape(mesh_)))
 
     # *** NEED TO REFACTOR ***
     
     #Perform a second dimension augmentation to account for the semi-informative features that are 
     # not included when the actual mesh is created
-    mesh_ = dimension_augment(model_params, mesh_)
+    mesh_ = dimension_augment(model_params['additional_features_dimension'], mesh_)
     print("Mesh shape is " + str(np.shape(mesh_)))
 
     print(training_data.shape)
