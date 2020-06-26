@@ -34,6 +34,11 @@ def twospirals(n_points, noise=.5):
     # labels = np.hstack((np.full(n_points, False, dtype=bool),np.full(n_points, True, dtype=bool)))
     y = np.transpose(np.asarray((labels==0, labels==1)))
 
+    x,y = randomize_order(x, y)
+
+    return x,y
+
+def randomize_order(x, y):
     #Randomize data-sample orders
     for_shuffle = list(zip(x, y))
     np.random.shuffle(for_shuffle)
@@ -42,12 +47,10 @@ def twospirals(n_points, noise=.5):
     #Get y back to an np array
     y = np.array(list(map(list, y)))
 
-
     return x,y
 
 
-
-def generate_toy_data(data_size, data_set, data_set_input_dimension, training_data_bool, noise=None):
+def generate_toy_data(data_size, data_set, additional_features_dimension, training_data_bool, noise=None):
 
     if data_set == 'linear':
 
@@ -88,13 +91,65 @@ def generate_toy_data(data_size, data_set, data_set_input_dimension, training_da
 
         x_data, one_hot_labels = twospirals(data_size, noise=noise)
 
+
+    elif data_set == 'hyper_spheres':
+        #Hyper_spheres has two dimensions that are perfectly linearly separable, as well as
+        # additional_features_dimension number of dimensions that are not perfectly seperable, but carry some
+        # class information; finally, dimension_augmentation will later be used to also add additional_features_dimension
+        # dimensions that are *not* informative
+
+        #Note there are two sources of noise: the fixed level of noise which determines the ground truth
+        # manifolds (thus the manifolds are more-gaussians than true spheres), 
+        # and the user-specified level of noise that is added to this
+
+        manifold_noise = 0.15
+
+        #Note the difference in means
+        base_features_zero_class = np.random.normal(0, scale=manifold_noise, size=(int(data_size/2),2)) #The base two features
+        base_features_one_class = np.random.normal(1, scale=manifold_noise, size=(int(data_size/2),2))
+
+        #print(base_features_zero_class.shape)
+
+        #Note the change in means and the use of additional_features_dimension
+        imperfect_features_zero_class = np.random.normal(0, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
+        imperfect_features_one_class = np.random.normal(1, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
+
+        #print(imperfect_features_zero_class.shape)
+
+        zero_class_data = np.concatenate((base_features_zero_class, imperfect_features_zero_class), axis=1)
+        #print(zero_class_data.shape)
+
+        one_class_data = np.concatenate((base_features_one_class, imperfect_features_one_class), axis=1)
+
+        x_data = np.concatenate((zero_class_data, one_class_data), axis=0)
+        #print(x_data.shape)
+
+        one_hot_labels = np.concatenate(
+            (np.concatenate((np.ones(shape=(int(data_size/2),1)), np.zeros(shape=(int(data_size/2),1))), axis=1),
+            np.concatenate((np.zeros(shape=(int(data_size/2),1)), np.ones(shape=(int(data_size/2),1))), axis=1)), 
+            axis=0)
+
+        # print(one_hot_labels.shape)
+        # print(x_data)
+        # print(one_hot_labels)
+
+        x_data, one_hot_labels = randomize_order(x=x_data, y=one_hot_labels)
+
+        if noise != None:
+            print("Adding Gaussian noise to training data")
+            x_data = x_data + np.random.normal(0, scale=noise, 
+                size=np.shape(x_data))
+
     return x_data, one_hot_labels
+
 
 def toy_initializer(network_iter, model_params):
     
     tf.reset_default_graph()
 
-    x_placeholder = tf.compat.v1.placeholder(tf.float32, [None, model_params['data_set_input_dimension']])
+    input_dim = 2+2*model_params['additional_features_dimension']
+
+    x_placeholder = tf.compat.v1.placeholder(tf.float32, [None, input_dim])
     y_placeholder = tf.compat.v1.placeholder(tf.int32, [None, 2])
     dropout_rate_placeholder = tf.compat.v1.placeholder(tf.float32)
 
@@ -102,7 +157,7 @@ def toy_initializer(network_iter, model_params):
 
     with tf.name_scope('Network_' + str(network_iter)):
         weights = {
-            'w1' : tf.compat.v1.get_variable('w1', shape=(model_params['data_set_input_dimension'],model_params['network_width']), initializer=initializer),
+            'w1' : tf.compat.v1.get_variable('w1', shape=(input_dim,model_params['network_width']), initializer=initializer),
             'w2' : tf.compat.v1.get_variable('w2', shape=(model_params['network_width'],model_params['network_width']), initializer=initializer),
             'w2b' : tf.compat.v1.get_variable('w2b', shape=(model_params['network_width'],model_params['network_width']), initializer=initializer),
             'w3' : tf.compat.v1.get_variable('w3', shape=(model_params['network_width'],2), initializer=initializer)
@@ -128,9 +183,9 @@ def toy_initializer(network_iter, model_params):
 def shallow_MLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
     layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
-    layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
+    #layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
 
-    logits = tf.nn.bias_add(tf.matmul(layer_2, weights['w3']), biases['b3'])
+    logits = tf.nn.bias_add(tf.matmul(layer_1, weights['w3']), biases['b3'])
 
     dummy = {}
 
@@ -221,6 +276,7 @@ def train_toy(pred_function, x_placeholder, y_placeholder, dropout_rate_placehol
         print("\nTraining complete.")
 
         save_path = saver.save(sess, "network_weights_data/" + str(network_iter) + '_' + model_params['architecture'] + str(model_params['network_width']) + ".ckpt")
+
 
         # Get predictions for each point in the mesh
         mesh_pred = sess.run(predictions, feed_dict = {x_placeholder: mesh, dropout_rate_placeholder: None, })
@@ -389,10 +445,11 @@ def normalize(training_data, testing_data):
 
     return training_data, testing_data
 
-def dimension_agument(model_params, x_data):
+#Add additional (uninformative) feature dimensions
+def dimension_augment(model_params, x_data):
 
     x_data = np.concatenate((x_data, np.zeros((np.shape(x_data)[0], 
-        model_params['data_set_input_dimension']-2))), axis=1)
+        model_params['additional_features_dimension']))), axis=1)
 
     return x_data
 
@@ -402,26 +459,48 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
     iter_dic = {} #Store results 
 
     training_data, training_labels = generate_toy_data(model_params['data_size'], model_params['data_set'], 
-        model_params['data_set_input_dimension'], training_data_bool=True, noise=model_params['Gaussian_noise'])
+        model_params['additional_features_dimension'], training_data_bool=True, noise=model_params['Gaussian_noise'])
+    
+    # print(training_data)
+    # print(training_labels.shape)
+    # print(training_labels)
+
+
     testing_data, testing_labels = generate_toy_data(adversarial_params['num_attack_examples'], model_params['data_set'], 
-        model_params['data_set_input_dimension'], training_data_bool=False, noise=None)
+        model_params['additional_features_dimension'], training_data_bool=False, noise=None)
 
     training_data, testing_data = normalize(training_data, testing_data)
 
     x_placeholder, y_placeholder, dropout_rate_placeholder, weights, biases, var_list = toy_initializer(network_iter, model_params)
 
 
-    #Note mesh data for plotting (rather than predictions) is *not* expanded beyond the two non-zero dimensions of for the input, in order to enable visualization
+    #Note mesh data for plotting (rather than predictions) is *not* expanded beyond the two non-zero dimensions of the input, in order to enable visualization
     mesh_all_data = np.concatenate((training_data, testing_data), axis=0)
     mesh_all_labels = (np.concatenate((training_labels, testing_labels), axis=0)[:, 1]).astype(int)
 
     mesh_ = create_mesh(mesh_all_data, step=model_params['step'])
 
+
+    print(training_data.shape)
+
     # Create the additional zero-valued, d-2 dimensional data to assess the effect of co-dimension (see Khoury, 2019 et al)
     # These features are *always* included when the network is making predictions (train, test, adversarial)
-    training_data = dimension_agument(model_params, training_data)
-    testing_data = dimension_agument(model_params, testing_data)
-    mesh_ = dimension_agument(model_params, np.c_[mesh_[0].ravel(), mesh_[1].ravel()])
+    training_data = dimension_augment(model_params, training_data)
+    testing_data = dimension_augment(model_params, testing_data)
+
+    print("Mesh shape is " + str(np.shape(mesh_)))
+    mesh_ = dimension_augment(model_params, np.c_[mesh_[0].ravel(), mesh_[1].ravel()])
+    print("Mesh shape is " + str(np.shape(mesh_)))
+
+    # *** NEED TO REFACTOR ***
+    
+    #Perform a second dimension augmentation to account for the semi-informative features that are 
+    # not included when the actual mesh is created
+    mesh_ = dimension_augment(model_params, mesh_)
+    print("Mesh shape is " + str(np.shape(mesh_)))
+
+    print(training_data.shape)
+
 
     functions = globals().copy()
     functions.update(locals())
@@ -433,6 +512,7 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
         dropout_rate_placeholder, training_data, training_labels, testing_data, testing_labels, mesh_,
      weights, biases, var_list, model_params, network_iter)
 
+
     iter_dic.update({'training_accuracy':float(training_acc), 'testing_accuracy':float(testing_acc)})
 
     update_dic, adver_pred_dic, adver_data_dic = carry_out_attacks(model_params=model_params, adversarial_params=adversarial_params, 
@@ -441,7 +521,7 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
         network_name_str=str(network_iter) + '_' + model_params['architecture'] + str(model_params['network_width']), 
         iter_num=network_iter, dynamic_dic=model_params['dynamic_dic'])
 
-    print(np.shape(adver_pred_dic[attack_for_visual]))
+    # print(np.shape(adver_pred_dic[attack_for_visual]))
 
     iter_dic.update(update_dic)
 
@@ -454,50 +534,50 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
     all_results_df.to_csv('Results.csv')
 
 
-    toy_colormap = {'0': 'red', '1': 'dodgerblue'} 
-    toy_labelmap = {'0': 'negative', '1': 'positive'} 
-    toy_labels = [toy_labelmap[str(x)] for x in mesh_all_labels]
+    # toy_colormap = {'0': 'red', '1': 'dodgerblue'} 
+    # toy_labelmap = {'0': 'negative', '1': 'positive'} 
+    # toy_labels = [toy_labelmap[str(x)] for x in mesh_all_labels]
 
-    adver_colormap = {'0': 'pink', '1': 'navy'} 
+    # adver_colormap = {'0': 'pink', '1': 'navy'} 
 
-    #Note that Carry_out_attacks will return a None (under class/prediction) and array of zeros where the attack
-    #was unsucessful; this is key to how tfCore_adversarial e.g. calculates distances, so rather than change this
-    #we use the locations of where an attack was unsuccessful to retrieve the original (true) label and the associated input features-data
-    #Note therefore that due to the label these will be clearly distinguishable from unaltered data that was misclassified
+    # #Note that Carry_out_attacks will return a None (under class/prediction) and array of zeros where the attack
+    # #was unsucessful; this is key to how tfCore_adversarial e.g. calculates distances, so rather than change this
+    # #we use the locations of where an attack was unsuccessful to retrieve the original (true) label and the associated input features-data
+    # #Note therefore that due to the label these will be clearly distinguishable from unaltered data that was misclassified
 
-    failed_adver_indices = np.nonzero(adver_pred_dic[attack_for_visual] == None)
+    # failed_adver_indices = np.nonzero(adver_pred_dic[attack_for_visual] == None)
 
-    print(np.shape(adver_pred_dic[attack_for_visual]))
-    print(adver_pred_dic[attack_for_visual])
-    print(np.shape(testing_labels))
-    print(failed_adver_indices)
+    # print(np.shape(adver_pred_dic[attack_for_visual]))
+    # print(adver_pred_dic[attack_for_visual])
+    # print(np.shape(testing_labels))
+    # print(failed_adver_indices)
 
-    adver_pred_dic[attack_for_visual][failed_adver_indices] = ((testing_labels[:,1]==1)[failed_adver_indices]).astype(int)
-    adver_data_dic[attack_for_visual][failed_adver_indices, :] = testing_data[failed_adver_indices, :]
-    adver_pred = adver_pred_dic[attack_for_visual]
-    adver_data = adver_data_dic[attack_for_visual]
+    # adver_pred_dic[attack_for_visual][failed_adver_indices] = ((testing_labels[:,1]==1)[failed_adver_indices]).astype(int)
+    # adver_data_dic[attack_for_visual][failed_adver_indices, :] = testing_data[failed_adver_indices, :]
+    # adver_pred = adver_pred_dic[attack_for_visual]
+    # adver_data = adver_data_dic[attack_for_visual]
 
-    half = int(adversarial_params['num_attack_examples']/2)
+    # half = int(adversarial_params['num_attack_examples']/2)
 
-    print(np.shape(test_pred))
-    print(np.shape(adver_pred))
+    # print(np.shape(test_pred))
+    # print(np.shape(adver_pred))
 
-    print("\n *** adversarial predictions ***")
-    print(test_pred[0:20])
-    print(adver_pred[0:20])
+    # print("\n *** adversarial predictions ***")
+    # print(test_pred[0:20])
+    # print(adver_pred[0:20])
 
-    #Plot test samples on decision boundary
-    plot_decision_boundaries(X_2D=mesh_all_data, targets=mesh_all_labels, labels=toy_labels, X_test_=testing_data, 
-                            mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data[0:half], 
-                            adver_pred=adver_pred[0:half],
-                             step_=model_params['step'], colormap_=toy_colormap, colormap_adver_=adver_colormap,
-                              labelmap_=toy_labelmap, network_iter=network_iter, boundary_iter=0)
+    # #Plot test samples on decision boundary
+    # plot_decision_boundaries(X_2D=mesh_all_data, targets=mesh_all_labels, labels=toy_labels, X_test_=testing_data, 
+    #                         mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data[0:half], 
+    #                         adver_pred=adver_pred[0:half],
+    #                          step_=model_params['step'], colormap_=toy_colormap, colormap_adver_=adver_colormap,
+    #                           labelmap_=toy_labelmap, network_iter=network_iter, boundary_iter=0)
 
-    plot_decision_boundaries(X_2D=mesh_all_data, targets=mesh_all_labels, labels=toy_labels, X_test_=testing_data, 
-                            mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data[half:], 
-                            adver_pred=adver_pred[half:],
-                             step_=model_params['step'], colormap_=toy_colormap, colormap_adver_=adver_colormap,
-                              labelmap_=toy_labelmap, network_iter=network_iter, boundary_iter=1)
+    # plot_decision_boundaries(X_2D=mesh_all_data, targets=mesh_all_labels, labels=toy_labels, X_test_=testing_data, 
+    #                         mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data[half:], 
+    #                         adver_pred=adver_pred[half:],
+    #                          step_=model_params['step'], colormap_=toy_colormap, colormap_adver_=adver_colormap,
+    #                           labelmap_=toy_labelmap, network_iter=network_iter, boundary_iter=1)
 
     return all_results_df
 
