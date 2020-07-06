@@ -152,6 +152,10 @@ def initializer_fun(params, training_data, training_labels):
                 weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(1600, 120), initializer=initializer)
                 weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(1176, 120), initializer=initializer)
 
+            if params['architecture'] == 'PixelCNN':
+                weights['pixels_W1'] = tf.compat.v1.get_variable('pixelsW1', shape=(28*28*4, 120), initializer=initializer)
+
+
             #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
             for weights_var in weights.values():
                 var_summaries(weights_var)
@@ -183,8 +187,11 @@ def initializer_fun(params, training_data, training_labels):
         biases['dense_b2'], biases['output_b']]
 
         if (params['architecture'] == 'BindingCNN') or (params['architecture'] == 'controlCNN'):
-                var_list.append(weights['course_bindingW1'])
-                var_list.append(weights['finegrained_bindingW1'])
+            var_list.append(weights['course_bindingW1'])
+            var_list.append(weights['finegrained_bindingW1'])
+
+        if params['architecture'] == 'PixelCNN':
+            var_list.append(weights['pixels_W1'])
 
         if params['meta_architecture'] == 'SAE':
             var_list.extend([decoder_weights['de_conv_W1'], decoder_weights['de_conv_W2'], 
@@ -340,6 +347,46 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynam
         scalar_dic['distance_dense1'] = distance_dense1
 
     return logits, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2
+
+
+def PixelCNN_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_dic):
+
+    print("Building a Pixel CNN")
+
+    scalar_dic = {} #Store the sparsity of layer activations for later analysis
+    pool1_drop, pool1_indices, relu1, scalar_dic = conv1_sequence(features, dropout_rate_placeholder, weights, biases, scalar_dic)
+
+    pool2_drop, pool2_indices, relu2, scalar_dic = conv2_sequence(pool1_drop, dropout_rate_placeholder, weights, biases, scalar_dic)
+
+    #Operations distinct from other networks:
+    pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 16])
+
+    #Flatten the input pixels to concatenate alongside the abstract pooled-features
+    pixel_dim = tf.dtypes.cast(28*28*4, dtype=tf.int32)
+    print("\nUsing %s pixels from input", pixel_dim)
+    print("Concatenating four pixel layers side-by-side")
+    features_flat = tf.concat((tf.concat((tf.reshape(tf.dtypes.cast(features, dtype=tf.float32), [-1, 28*28]), 
+    	tf.reshape(tf.dtypes.cast(features, dtype=tf.float32), [-1, 28*28])), axis=1),
+        tf.concat((tf.reshape(tf.dtypes.cast(features, dtype=tf.float32), [-1, 28*28]), 
+        tf.reshape(tf.dtypes.cast(features, dtype=tf.float32), [-1, 28*28])), axis=1)), axis=1)
+    features_flat = features_flat[:,0:pixel_dim]
+
+    dense1 = tf.nn.bias_add(
+        tf.add(tf.matmul(pool2_flat, weights['dense_W1']), 
+            tf.matmul(features_flat, weights['pixels_W1'])), 
+        biases['dense_b1'])
+
+    logits, scalar_dic, dense1_drop, dense2_drop = fc_sequence(dense1, dropout_rate_placeholder, weights, biases, scalar_dic)
+
+    AutoEncoder_vars = {}
+
+    #Any L1 activation regularization used on the standard LeNet-5 applies to the fully-connected layer
+    l1_reg_activations1 = tf.norm(dense1_drop, ord=1, axis=None)
+    l1_reg_activations2 = 0
+
+    return logits, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2
+
+
 
 #High capacity model for MNIST with the same architecture as used in Madry et, 2017
 def MadryCNN_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_dic):
@@ -784,6 +831,8 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
             print("Adding an L1 regularization of " + str(params['L1_regularization_activations1']) + " to the penultimate LeNet fully-connected layer.")
         elif params['architecture'] == 'SchottCNN':
             predictions, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2 = SchottCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
+        elif params['architecture'] == 'PixelCNN':
+            predictions, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2 = PixelCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
         elif params['architecture'] == 'VGG':
             predictions, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2 = VGG_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic'])
         elif params['architecture'] == 'BindingCNN':
