@@ -10,6 +10,7 @@ from keras.preprocessing.image import ImageDataGenerator
 import matplotlib.pyplot as plt
 import mltest
 from PIL import Image
+from skimage.util import random_noise
 import os
 import tfCore_adversarial_attacks as atk
 
@@ -17,17 +18,21 @@ import tfCore_adversarial_attacks as atk
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' 
 
 def data_setup(params):
-    if params['dataset'] == 'mnist' or 'mnist_SchottCNN':
-        (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
-        training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
-        testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
 
-    elif params['dataset'] == 'fashion_mnist':
-        (training_data, training_labels), (testing_data, testing_labels) = fashion_mnist.load_data()
-        training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
-        testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
+    # if params['dataset'] == 'mnist' or 'mnist_SchottCNN':
+    #     print("\nLoading MNIST data-set")
+    #     (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
+    #     training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
+    #     testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
 
-    elif params['dataset'] == 'cifar10':
+    # elif params['dataset'] == 'fashion_mnist':
+    #     print("\nLoading Fashion MNIST data-set")
+    #     (training_data, training_labels), (testing_data, testing_labels) = fashion_mnist.load_data()
+    #     training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
+    #     testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
+
+    if params['dataset'] == 'cifar10':
+        print("\nLoading CIFAR-10 data-set")
         (training_data, training_labels), (testing_data, testing_labels) = cifar10.load_data()
     
     training_data = training_data/255
@@ -144,16 +149,16 @@ def initializer_fun(params, training_data, training_labels):
             weights = {
             'conv_W1' : tf.compat.v1.get_variable('CW1', shape=(5, 5, 1, 6), initializer=initializer),
             'conv_W2' : tf.compat.v1.get_variable('CW2', shape=(5, 5, 6, 16), initializer=initializer),
-            'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(400, 120), initializer=initializer),
-            'dense_W2' : tf.compat.v1.get_variable('DW2', shape=(120, 84), initializer=initializer),
-            'output_W' : tf.compat.v1.get_variable('OW', shape=(84, 10), initializer=initializer)
+            'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(400, params['MLP_layer_1_dim']), initializer=initializer),
+            'dense_W2' : tf.compat.v1.get_variable('DW2', shape=(params['MLP_layer_1_dim'], params['MLP_layer_2_dim']), initializer=initializer),
+            'output_W' : tf.compat.v1.get_variable('OW', shape=(params['MLP_layer_2_dim'], 10), initializer=initializer)
             }
             if (params['architecture'] == 'BindingCNN') or (params['architecture'] == 'controlCNN'):
-                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(1600, 120), initializer=initializer)
-                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(1176, 120), initializer=initializer)
+                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(1600, params['MLP_layer_1_dim']), initializer=initializer)
+                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(1176, params['MLP_layer_1_dim']), initializer=initializer)
 
             if params['architecture'] == 'PixelCNN':
-                weights['pixels_W1'] = tf.compat.v1.get_variable('pixelsW1', shape=(28*28*4, 120), initializer=initializer)
+                weights['pixels_W1'] = tf.compat.v1.get_variable('pixelsW1', shape=(28*28*4, params['MLP_layer_1_dim']), initializer=initializer)
 
 
             #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
@@ -163,8 +168,8 @@ def initializer_fun(params, training_data, training_labels):
             biases = {
             'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(6), initializer=initializer),
             'conv_b2' : tf.compat.v1.get_variable('Cb2', shape=(16), initializer=initializer),
-            'dense_b1' : tf.compat.v1.get_variable('Db1', shape=(120), initializer=initializer),
-            'dense_b2' : tf.compat.v1.get_variable('Db2', shape=(84), initializer=initializer),
+            'dense_b1' : tf.compat.v1.get_variable('Db1', shape=(params['MLP_layer_1_dim']), initializer=initializer),
+            'dense_b2' : tf.compat.v1.get_variable('Db2', shape=(params['MLP_layer_2_dim']), initializer=initializer),
             'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
             }
 
@@ -174,8 +179,8 @@ def initializer_fun(params, training_data, training_labels):
             decoder_weights = {
                 'de_conv_W1' : tf.get_variable('de_CW1', shape=(5, 5, 6, 1), initializer=initializer),
                 'de_conv_W2' : tf.get_variable('de_CW2', shape=(5, 5, 16, 6), initializer=initializer),
-                'de_dense_W1' : tf.get_variable('de_DW1', shape=(120, 400), initializer=initializer),
-                'de_dense_W2' : tf.get_variable('de_DW2', shape=(84, 120), initializer=initializer),
+                'de_dense_W1' : tf.get_variable('de_DW1', shape=(params['MLP_layer_1_dim'], 400), initializer=initializer),
+                'de_dense_W2' : tf.get_variable('de_DW2', shape=(params['MLP_layer_2_dim'], params['MLP_layer_1_dim']), initializer=initializer),
                 }
 
             for decoder_weights_var in decoder_weights.values():
@@ -209,15 +214,15 @@ def initializer_fun(params, training_data, training_labels):
             'conv_W4' : tf.compat.v1.get_variable('CW4', shape=(3, 3, 64, 64), initializer=initializer),
             'conv_W5' : tf.compat.v1.get_variable('CW5', shape=(3, 3, 64, 128), initializer=initializer),
             'conv_W6' : tf.compat.v1.get_variable('CW6', shape=(3, 3, 128, 128), initializer=initializer),
-            'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(4*4*128, 120), initializer=initializer),
-            'dense_W2' : tf.compat.v1.get_variable('DW2', shape=(120, 84), initializer=initializer),
-            'output_W' : tf.compat.v1.get_variable('OW', shape=(84, 10), initializer=initializer)
+            'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(4*4*128, params['MLP_layer_1_dim']), initializer=initializer),
+            'dense_W2' : tf.compat.v1.get_variable('DW2', shape=(params['MLP_layer_1_dim'], params['MLP_layer_2_dim']), initializer=initializer),
+            'output_W' : tf.compat.v1.get_variable('OW', shape=(params['MLP_layer_2_dim'], 10), initializer=initializer)
             }
             if (params['architecture'] == 'BindingVGG') or (params['architecture'] == 'controlVGG'):
-                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(16*16*64, 120), initializer=initializer)
-                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(16*16*32, 120), initializer=initializer)
-                weights['course_bindingW2'] = tf.compat.v1.get_variable('courseW2', shape=(8*8*128, 120), initializer=initializer)
-                weights['finegrained_bindingW2'] = tf.compat.v1.get_variable('fineW2', shape=(8*8*64, 120), initializer=initializer)
+                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(16*16*64, params['MLP_layer_1_dim']), initializer=initializer)
+                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(16*16*32, params['MLP_layer_1_dim']), initializer=initializer)
+                weights['course_bindingW2'] = tf.compat.v1.get_variable('courseW2', shape=(8*8*128, params['MLP_layer_1_dim']), initializer=initializer)
+                weights['finegrained_bindingW2'] = tf.compat.v1.get_variable('fineW2', shape=(8*8*64, params['MLP_layer_1_dim']), initializer=initializer)
 
             for weights_var in weights.values():
                 var_summaries(weights_var)
@@ -229,8 +234,8 @@ def initializer_fun(params, training_data, training_labels):
             'conv_b4' : tf.compat.v1.get_variable('Cb4', shape=(64), initializer=initializer),
             'conv_b5' : tf.compat.v1.get_variable('Cb5', shape=(128), initializer=initializer),
             'conv_b6' : tf.compat.v1.get_variable('Cb6', shape=(128), initializer=initializer),
-            'dense_b1' : tf.compat.v1.get_variable('Db1', shape=(120), initializer=initializer),
-            'dense_b2' : tf.compat.v1.get_variable('Db2', shape=(84), initializer=initializer),
+            'dense_b1' : tf.compat.v1.get_variable('Db1', shape=(params['MLP_layer_1_dim']), initializer=initializer),
+            'dense_b2' : tf.compat.v1.get_variable('Db2', shape=(params['MLP_layer_2_dim']), initializer=initializer),
             'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
             }
 
@@ -339,7 +344,7 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynam
         #Normalise the distance by the size of the layer
         distance_pool1 = distance_pool1/(14 * 14 * 6)
         distance_pool2 = distance_pool2/(5 * 5 * 16)
-        distance_dense1 = distance_dense1/120
+        distance_dense1 = distance_dense1/params['MLP_layer_1_dim']
 
         #Return a dictionary with the scalar values for that batch
         scalar_dic['distance_pool1'] = distance_pool1
@@ -908,26 +913,24 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
                     if batches >= len(training_labels)/params['batch_size']:
                         break
 
-                    loss, acc = train_batch(batch_x, batch_y, params['dropout_rate'])
+                    loss, training_acc = train_batch(batch_x, batch_y, params['dropout_rate'])
             else:
                 #Shuffle the training data
                 rand_idx = np.random.permutation(len(training_labels))
                 shuffled_training_data = training_data[rand_idx]
                 shuffled_training_labels = training_labels[rand_idx]
 
-                # print(np.shape(shuffled_training_data))
+                half_point = round(np.shape(shuffled_training_data)[0]/2)
 
-                # print(shuffled_training_data[0:3, 10:13, 10:13])
-                # print(np.max((np.max(shuffled_training_data, axis=1)), axis=0))
-
-                #Option to add Gaussian noise
                 if params['Gaussian_noise'] != None:
-                    print("Adding Gaussian noise to training data")
+                    print("Adding Gaussian noise *to the first half* of training data")
                     #Also clip the data after noise
-                    shuffled_training_data = np.clip(shuffled_training_data + np.random.normal(0, scale=params['Gaussian_noise'], size=np.shape(shuffled_training_data)), 0, 1)
+                    shuffled_training_data[:half_point] = np.clip(shuffled_training_data[:half_point] + np.random.normal(0, scale=params['Gaussian_noise'], size=np.shape(shuffled_training_data[:half_point])), 0, 1)
 
-                # print(shuffled_training_data[0:3, 10:13, 10:13])
-                # print(np.max((np.max(shuffled_training_data, axis=1)), axis=0))
+                if params['salt&pepper_noise'] != None:
+                    print("Adding salt & pepper noise to *the second half* of training data")
+        
+                    shuffled_training_data[half_point:] = random_noise(shuffled_training_data[half_point:], mode='s&p', salt_vs_pepper=0.5, amount=(params['salt&pepper_noise']/(28*28)))
 
                 training_accuracy_total = 0
                 for training_batch in range(math.ceil(len(training_labels)/params['batch_size'])):
