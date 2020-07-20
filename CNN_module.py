@@ -19,17 +19,17 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 def data_setup(params):
 
-    # if params['dataset'] == 'mnist' or 'mnist_SchottCNN':
-    #     print("\nLoading MNIST data-set")
-    #     (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
-    #     training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
-    #     testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
+    if params['dataset'] == 'mnist' or 'mnist_SchottCNN':
+        print("\nLoading MNIST data-set")
+        (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
+        training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
+        testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
 
-    # elif params['dataset'] == 'fashion_mnist':
-    #     print("\nLoading Fashion MNIST data-set")
-    #     (training_data, training_labels), (testing_data, testing_labels) = fashion_mnist.load_data()
-    #     training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
-    #     testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
+    elif params['dataset'] == 'fashion_mnist':
+        print("\nLoading Fashion MNIST data-set")
+        (training_data, training_labels), (testing_data, testing_labels) = fashion_mnist.load_data()
+        training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
+        testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
 
     if params['dataset'] == 'cifar10':
         print("\nLoading CIFAR-10 data-set")
@@ -54,8 +54,8 @@ def data_setup(params):
     return (training_data, training_labels, testing_data, testing_labels, crossval_data, crossval_labels)
 
 #Define a summary variables function for later visualisation of the network
-def var_summaries(variable):
-    with tf.name_scope('Summaries'):
+def var_summaries(variable, key):
+    with tf.name_scope(name=(key + '_summ')):
         mean = tf.reduce_mean(variable)
         tf.compat.v1.summary.scalar('Mean', mean)
 
@@ -88,19 +88,12 @@ def initializer_fun(params, training_data, training_labels):
             'conv_W4' : tf.compat.v1.get_variable('CW4', shape=(5, 5, 256, 10), initializer=initializer)
             }
 
-            #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
-            for weights_var in weights.values():
-                var_summaries(weights_var)
-
             biases = {
             'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(20), initializer=initializer),
             'conv_b2' : tf.compat.v1.get_variable('Cb2', shape=(70), initializer=initializer),
             'conv_b3' : tf.compat.v1.get_variable('Cb3', shape=(256), initializer=initializer),
             'conv_b4' : tf.compat.v1.get_variable('Cb4', shape=(10), initializer=initializer)
             }
-
-            for biases_var in biases.values():
-                var_summaries(biases_var)
 
             decoder_weights = None
 
@@ -120,19 +113,12 @@ def initializer_fun(params, training_data, training_labels):
             'output_W' : tf.compat.v1.get_variable('OW', shape=(512, 10), initializer=initializer)
             }
 
-            #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
-            for weights_var in weights.values():
-                var_summaries(weights_var)
-
             biases = {
             'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(16), initializer=initializer),
             'conv_b2' : tf.compat.v1.get_variable('Cb2', shape=(32), initializer=initializer),
             'dense_b1' : tf.compat.v1.get_variable('Db1', shape=(512), initializer=initializer),
             'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
             }
-
-            for biases_var in biases.values():
-                var_summaries(biases_var)
 
             decoder_weights = None
 
@@ -161,10 +147,6 @@ def initializer_fun(params, training_data, training_labels):
                 weights['pixels_W1'] = tf.compat.v1.get_variable('pixelsW1', shape=(28*28*4, params['MLP_layer_1_dim']), initializer=initializer)
 
 
-            #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
-            for weights_var in weights.values():
-                var_summaries(weights_var)
-
             biases = {
             'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(6), initializer=initializer),
             'conv_b2' : tf.compat.v1.get_variable('Cb2', shape=(16), initializer=initializer),
@@ -173,19 +155,12 @@ def initializer_fun(params, training_data, training_labels):
             'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
             }
 
-            for biases_var in biases.values():
-                var_summaries(biases_var)
-
             decoder_weights = {
                 'de_conv_W1' : tf.get_variable('de_CW1', shape=(5, 5, 6, 1), initializer=initializer),
                 'de_conv_W2' : tf.get_variable('de_CW2', shape=(5, 5, 16, 6), initializer=initializer),
                 'de_dense_W1' : tf.get_variable('de_DW1', shape=(params['MLP_layer_1_dim'], 400), initializer=initializer),
                 'de_dense_W2' : tf.get_variable('de_DW2', shape=(params['MLP_layer_2_dim'], params['MLP_layer_1_dim']), initializer=initializer),
                 }
-
-            for decoder_weights_var in decoder_weights.values():
-                var_summaries(decoder_weights_var)
-
 
         var_list = [weights['conv_W1'], weights['conv_W2'], weights['dense_W1'], weights['dense_W2'], 
         weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['dense_b1'], 
@@ -224,9 +199,6 @@ def initializer_fun(params, training_data, training_labels):
                 weights['course_bindingW2'] = tf.compat.v1.get_variable('courseW2', shape=(8*8*128, params['MLP_layer_1_dim']), initializer=initializer)
                 weights['finegrained_bindingW2'] = tf.compat.v1.get_variable('fineW2', shape=(8*8*64, params['MLP_layer_1_dim']), initializer=initializer)
 
-            for weights_var in weights.values():
-                var_summaries(weights_var)
-
             biases = {
             'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(32), initializer=initializer),
             'conv_b2' : tf.compat.v1.get_variable('Cb2', shape=(32), initializer=initializer),
@@ -239,9 +211,6 @@ def initializer_fun(params, training_data, training_labels):
             'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
             }
 
-            for biases_var in biases.values():
-                var_summaries(biases_var)
- 
             decoder_weights = None
 
         var_list = [weights['conv_W1'], weights['conv_W2'], weights['conv_W3'], weights['conv_W4'], 
@@ -256,6 +225,13 @@ def initializer_fun(params, training_data, training_labels):
                 var_list.append(weights['course_bindingW2'])
                 var_list.append(weights['finegrained_bindingW2'])
     
+    #Add summaries for each weight variable in the dictionary, for later use in TensorBoard
+    for weights_key, weights_var in weights.items():
+        var_summaries(weights_var, weights_key)
+
+    for biases_key, biases_var in biases.items():
+        var_summaries(biases_var, biases_key)
+
     return x, y, dropout_rate_placeholder, var_list, weights, biases, decoder_weights
 
 
@@ -851,15 +827,11 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
         cost = (tf.reduce_mean(tf.compat.v1.losses.softmax_cross_entropy(logits=predictions, onehot_labels=y_placeholder, label_smoothing=params['label_smoothing'])) + 
             params['L1_regularization_activations1']*l1_reg_activations1 + params['L1_regularization_activations2']*l1_reg_activations2)
-        tf.compat.v1.summary.scalar('Softmax_cross_entropy', cost)
 
         correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
         total_accuracy = tf.reduce_sum(tf.cast(correct_prediction, tf.float32)) #Used to store batched accuracy for evaluating on the entire test dataset
         
-        tf.compat.v1.summary.scalar('Accuracy', accuracy)
-        accuracy_summary = tf.compat.v1.summary.scalar(name="Accuracy_values", tensor=accuracy)
-
     elif params['meta_architecture'] == 'SAE':
         predictions, reconstruction_logits = AutoEncoder(x_placeholder, dropout_rate_placeholder, weights, biases, decoder_weights, 
             dynamic_dic=params['dynamic_dic'], prediction_fun=params['architecture']+'_predictions') 
@@ -877,9 +849,6 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
     #Create the chosen optimizer with tf.train.Adam..., then add it to the graph with .minimize
     optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=params['learning_rate']).minimize(cost)
-
-    #Define values to be written with the summary method for later visualization
-    loss_summary = tf.compat.v1.summary.scalar(name="Loss_values", tensor=cost)
 
     #Create a Saver object to enable later re-loading of the learned weights
     saver = tf.compat.v1.train.Saver(var_list)
@@ -940,11 +909,17 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
                     loss, acc = train_batch(batch_x, batch_y, params['dropout_rate'])
                     
                     #Without drop-out, assess the performance on the training dataset
-                    batch_training_acc = sess.run(total_accuracy, feed_dict={x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : 0.0})
+                    network_summary, batch_training_acc = sess.run([merged, total_accuracy], feed_dict={x_placeholder: batch_x, y_placeholder: batch_y, dropout_rate_placeholder : 0.0})
                     training_accuracy_total += batch_training_acc
 
+                #Add the TensorBoard summary data of the network (weight histograms etc.), derived from the last batch run
+                training_writer.add_summary(network_summary, epoch)
+
                 training_acc = training_accuracy_total/len(training_labels)
-                #training_writer.add_summary(training_acc, epoch)
+                #Convert python variable into a Summary object for TensorFlow
+                training_summary = tf.Summary(value=[tf.Summary.Value(tag="training_acc", simple_value=training_acc),])              
+                training_writer.add_summary(training_summary, epoch)
+
             
             #Find the accuracy on the test dataset using batches to avoid issues of memory capacity
             testing_accuracy_total = 0
@@ -957,8 +932,10 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
                 testing_accuracy_total += batch_testing_acc
 
             testing_acc = testing_accuracy_total/len(testing_labels)
-            #testing_writer.add_summary(testing_acc, epoch)
+            testing_summary = tf.Summary(value=[tf.Summary.Value(tag="testing_acc", simple_value=testing_acc),])              
+            testing_writer.add_summary(testing_summary, epoch)
 
+            #Note the loss given is only for the most recent batch
             print("At iteration " + str(epoch) + ", Loss = " + \
                  "{:.4f}".format(loss) + ", Training Accuracy = " + \
                                 "{:.4f}".format(training_acc) + ", Testing Accuracy = " + \
