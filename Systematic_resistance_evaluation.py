@@ -229,22 +229,28 @@ def analyse_activations(adversarial_params, input_data, input_labels, x_placehol
 def transfer_attack_setup(adversarial_params, evaluation_data, evaluation_labels, training_data, training_labels):
 
 	surrogate_params = {
-		'architecture':'LeNet',
-		'dynamic_dic':{'dynamic_var':'None', 'analysis_var':'None', 'sparsification_kwinner':0.1, 'sparsification_dropout':0.0},
+		'architecture':'VGG',
+		'dynamic_dic':{'dynamic_var':'None', 'analysis_var':'None', 
+			'sparsification_kwinner':0.4, 'sparsification_dropout':0.0},
 		'dataset':'cifar10',
-	    'learning_rate':0.001,
+	    'learning_rate':0.0005,
 		'meta_architecture':'CNN',
-		'train_new_network':True,
+		'train_new_network':False,
 		'adver_trained':False,
 		'crossval_bool':True,
 		'check_stochasticity':False,
 		'num_network_duplicates':1,
-	    'training_epochs':45,
+	    'training_epochs':500,
 	    'Gaussian_noise':None,
+	    'salt&pepper_noise':None,
 	    'dropout_rate':0.25,
+	    'predictive_weighting':0.01,
 	    'He_modifier':1.0,
 	    'shift_range':0.1,
-	    'label_smoothing':0.0,
+	    'label_smoothing':0.1,
+	    'MLP_layer_1_dim':120,
+	    'MLP_layer_2_dim':84,
+	    'L2_regularization_scale':0.03,
 	    'L1_regularization_activations1':0.0,
 	    'L1_regularization_activations2':0.0,
 	    'batch_size':128
@@ -260,6 +266,9 @@ def transfer_attack_setup(adversarial_params, evaluation_data, evaluation_labels
 		training_accuracy, eval_accuracy, network_name_str, eval_sparsity = CNN.network_train(surrogate_params, iter_num, surrogate_var_list, training_data, 
 			training_labels, evaluation_data, evaluation_labels, surrogate_weights, surrogate_biases, surrogate_decoder_weights, x_placeholder=surrogate_x_placeholder, 
 		    y_placeholder=surrogate_y_placeholder, dropout_rate_placeholder=surrogate_dropout_rate_placeholder)
+
+	else:
+		network_name_str = str(999) + surrogate_params['architecture'] + '_adver_trained_' + str(surrogate_params['adver_trained'])
 
 	surrogate_dic = {'model_prediction_function':getattr(CNN, surrogate_params['architecture'] + '_predictions'),
         'model_weights':"network_weights_data/" + network_name_str + ".ckpt",
@@ -279,23 +288,15 @@ def transfer_attack_setup(adversarial_params, evaluation_data, evaluation_labels
 
 	#Pass the surrogate model
 
-	# FGM = atk.FGM_attack(surrogate_dic)
-	# _, FGM_distances, FGM_adversaries_array, _ = FGM.evaluate_resistance()
-
-	print("Using DeepFool rather than FGM for transfer generation.")
-	FGM = atk.DeepFool_L2_attack(surrogate_dic)
+	FGM = atk.FGM_attack(surrogate_dic)
 	_, FGM_distances, FGM_adversaries_array, _ = FGM.evaluate_resistance()
-
 
 	BIM_L2 = atk.BIM_L2_attack(surrogate_dic)
 	_, BIM_L2_distances, BIML2_adversaries_array, _ = BIM_L2.evaluate_resistance()
 
 
 
-	# FGSM = atk.FGSM_attack(surrogate_dic)
-	# _, FGSM_distances, FGSM_adversaries_array, _ = FGSM.evaluate_resistance()
-
-	FGSM = atk.DeepFool_LInf_attack(surrogate_dic)
+	FGSM = atk.FGSM_attack(surrogate_dic)
 	_, FGSM_distances, FGSM_adversaries_array, _ = FGSM.evaluate_resistance()
 
 	BIM_LInf = atk.BIM_Linfinity_attack(surrogate_dic)
@@ -352,28 +353,28 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	LInf_running_min = [] #Keep track of the minimum adversarial perturbation required for each image
 	L2_running_min = [] #Keep track of the minimum adversarial perturbation required for each image
 
-	print("\n\n***Performing L-0 Distance Attacks***\n")
+	# print("\n\n***Performing L-0 Distance Attacks***\n")
 
-	attack_name = 'pointwise_L0'
-	pointwise_L0 = atk.pointwise_attack_L0(attack_dic)
-	adversary_found, adversary_distance, adversaries_array, adversary_labels = pointwise_L0.evaluate_resistance()
-	network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
-		perturbation_threshold=adversarial_params['perturbation_threshold']['L0'])
-	L0_running_min = adversary_distance
-	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	# attack_name = 'pointwise_L0'
+	# pointwise_L0 = atk.pointwise_attack_L0(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, adversary_labels = pointwise_L0.evaluate_resistance()
+	# network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+	# 	perturbation_threshold=adversarial_params['perturbation_threshold']['L0'])
+	# L0_running_min = adversary_distance
+	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	attack_name = 'salt'
-	salt = atk.salt_pepper_attack(attack_dic)
-	adversary_found, adversary_distance, adversaries_array, adversary_labels = salt.evaluate_resistance()
-	network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
-		perturbation_threshold=adversarial_params['perturbation_threshold']['L0'])
-	L0_running_min = np.minimum(L0_running_min, adversary_distance) #Take element-wise minimum
-	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	# attack_name = 'salt'
+	# salt = atk.salt_pepper_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, adversary_labels = salt.evaluate_resistance()
+	# network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+	# 	perturbation_threshold=adversarial_params['perturbation_threshold']['L0'])
+	# L0_running_min = np.minimum(L0_running_min, adversary_distance) #Take element-wise minimum
+	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	print("\nResults across all L0 attacks...")
-	attack_name = 'all_L0'
-	network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(L0_running_min, adversary_labels, 
-		perturbation_threshold=adversarial_params['perturbation_threshold']['L0'])
+	# print("\nResults across all L0 attacks...")
+	# attack_name = 'all_L0'
+	# network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(L0_running_min, adversary_labels, 
+	# 	perturbation_threshold=adversarial_params['perturbation_threshold']['L0'])
 
 
 	print("\n\n***Performing L-Inf Distance Attacks***\n")
@@ -412,21 +413,21 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	adver_data_dic[attack_name] = adversaries_array
 	adver_pred_dic[attack_name] = adversary_labels
 
-	attack_name = 'DeepFool_LInf'
-	DeepFool_LInf = atk.DeepFool_LInf_attack(attack_dic)
-	adversary_found, adversary_distance, adversaries_array, adversary_labels = DeepFool_LInf.evaluate_resistance()
-	network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
-		perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
-	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
-	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	# attack_name = 'DeepFool_LInf'
+	# DeepFool_LInf = atk.DeepFool_LInf_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, adversary_labels = DeepFool_LInf.evaluate_resistance()
+	# network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+	# 	perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
+	# LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
+	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 	
-	attack_name = 'MIM'
-	MIM = atk.MIM_attack(attack_dic)
-	adversary_found, adversary_distance, adversaries_array, adversary_labels = MIM.evaluate_resistance()
-	network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
-		perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
-	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
-	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	# attack_name = 'MIM'
+	# MIM = atk.MIM_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, adversary_labels = MIM.evaluate_resistance()
+	# network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+	# 	perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
+	# LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
+	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 	
 	# attack_name = 'hop_skip_LInf'
 	# hop_skip_LInf = atk.hop_skip_attack_LInf(attack_dic,
@@ -470,13 +471,13 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	L2_running_min = np.minimum(L2_running_min, adversary_distance)
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	attack_name = 'pointwise_L2'
-	pointwise_L2 = atk.pointwise_attack_L2(attack_dic)
-	adversary_found, adversary_distance, adversaries_array, adversary_labels = pointwise_L2.evaluate_resistance()
-	network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
-		perturbation_threshold=adversarial_params['perturbation_threshold']['L2'])
-	L2_running_min = np.minimum(L2_running_min, adversary_distance)
-	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	# attack_name = 'pointwise_L2'
+	# pointwise_L2 = atk.pointwise_attack_L2(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, adversary_labels = pointwise_L2.evaluate_resistance()
+	# network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+	# 	perturbation_threshold=adversarial_params['perturbation_threshold']['L2'])
+	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
+	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
 	attack_name = 'FGM'
 	FGM = atk.FGM_attack(attack_dic)
@@ -494,13 +495,13 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	L2_running_min = np.minimum(L2_running_min, adversary_distance)
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
-	attack_name = 'DeepFool_L2'
-	DeepFool_L2 = atk.DeepFool_L2_attack(attack_dic)
-	adversary_found, adversary_distance, adversaries_array, adversary_labels = DeepFool_L2.evaluate_resistance()
-	network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
-		perturbation_threshold=adversarial_params['perturbation_threshold']['L2'])
-	L2_running_min = np.minimum(L2_running_min, adversary_distance)
-	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+	# attack_name = 'DeepFool_L2'
+	# DeepFool_L2 = atk.DeepFool_L2_attack(attack_dic)
+	# adversary_found, adversary_distance, adversaries_array, adversary_labels = DeepFool_L2.evaluate_resistance()
+	# network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+	# 	perturbation_threshold=adversarial_params['perturbation_threshold']['L2'])
+	# L2_running_min = np.minimum(L2_running_min, adversary_distance)
+	# np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
 	# # # attack_name = 'BrendelBethge'
 	# # # BrendelBethge = atk.brendel_bethge_attack_L2(attack_dic)
@@ -592,18 +593,18 @@ if __name__ == '__main__':
 		# For a control model, activations1 refers to unpooling, activations2 to gradient unpooling
 		# For any other models, these activations have no regularizing effect
 	model_params = {
-		'architecture':'BindingCNN',
+		'architecture':'VGG',
 		'dynamic_dic':{'dynamic_var':'None', 'analysis_var':'None', 
 			'sparsification_kwinner':0.4, 'sparsification_dropout':0.0},
-		'dataset':'mnist',
-	    'learning_rate':0.001,
+		'dataset':'cifar10',
+	    'learning_rate':0.0005,
 		'meta_architecture':'CNN',
-		'train_new_network':True,
+		'train_new_network':False,
 		'adver_trained':False,
 		'crossval_bool':True,
 		'check_stochasticity':False,
-		'num_network_duplicates':15,
-	    'training_epochs':45,
+		'num_network_duplicates':10,
+	    'training_epochs':500,
 	    'Gaussian_noise':None,
 	    'salt&pepper_noise':None,
 	    'dropout_rate':0.25,
@@ -613,6 +614,7 @@ if __name__ == '__main__':
 	    'label_smoothing':0.1,
 	    'MLP_layer_1_dim':120,
 	    'MLP_layer_2_dim':84,
+	    'L2_regularization_scale':0.03,
 	    'L1_regularization_activations1':0.0,
 	    'L1_regularization_activations2':0.0,
 	    'batch_size':128
@@ -627,7 +629,7 @@ if __name__ == '__main__':
 	    'boundary_attack_iterations':1000,
 	    'boundary_attack_log_steps':1000,
 	    'perturbation_threshold':{'L0':12, 'LInf':0.3,  'L2':1.5},
-	    'save_images':True
+	    'save_images':False
 	    }
 
 	#Confirm chosen hyperparameters
