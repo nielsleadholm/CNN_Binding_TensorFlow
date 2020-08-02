@@ -19,17 +19,19 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
 def data_setup(params):
 
-    if params['dataset'] == 'mnist' or 'mnist_SchottCNN':
-        print("\nLoading MNIST data-set")
-        (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
-        training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
-        testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
+    # if params['dataset'] == 'mnist' or 'mnist_SchottCNN':
+    #     print("\nLoading MNIST data-set")
+    #     (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
+    #     training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
+    #     testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
 
-    elif params['dataset'] == 'fashion_mnist':
-        print("\nLoading Fashion MNIST data-set")
-        (training_data, training_labels), (testing_data, testing_labels) = fashion_mnist.load_data()
-        training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
-        testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
+    # elif params['dataset'] == 'fashion_mnist':
+    #     print("\nLoading Fashion MNIST data-set")
+    #     (training_data, training_labels), (testing_data, testing_labels) = fashion_mnist.load_data()
+    #     training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
+    #     testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
+
+    print("\n\n *** temporary fix for CIFAR-10 dataset ***")
 
     if params['dataset'] == 'cifar10':
         print("\nLoading CIFAR-10 data-set")
@@ -74,6 +76,10 @@ def initializer_fun(params, training_data, training_labels):
     dropout_rate_placeholder = tf.compat.v1.placeholder(tf.float32)
     #He-initialization; note the 'Delving Deep into Rectifiers' used a value of 2.0
     initializer = tf.contrib.layers.variance_scaling_initializer(factor=2.0*params['He_modifier'])
+    regularizer_l2 = tf.contrib.layers.l2_regularizer(scale=params['L2_regularization_scale'])
+
+    print("\n*** L2 regularizaiton implemented!***\n")
+
     y = tf.compat.v1.placeholder(training_labels.dtype, [None, 10], name='y-input')
 
     if (params['dataset'] == 'mnist_SchottCNN'): #Define core variables for a LeNet-5 architecture for MNIST/FashionMNIST
@@ -140,8 +146,8 @@ def initializer_fun(params, training_data, training_labels):
             'output_W' : tf.compat.v1.get_variable('OW', shape=(params['MLP_layer_2_dim'], 10), initializer=initializer)
             }
             if (params['architecture'] == 'BindingCNN') or (params['architecture'] == 'controlCNN'):
-                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(1600, params['MLP_layer_1_dim']), initializer=initializer)
-                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(1176, params['MLP_layer_1_dim']), initializer=initializer)
+                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(1600, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
+                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(1176, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
 
             if params['architecture'] == 'PixelCNN':
                 weights['pixels_W1'] = tf.compat.v1.get_variable('pixelsW1', shape=(28*28*4, params['MLP_layer_1_dim']), initializer=initializer)
@@ -826,7 +832,7 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
             predictions, AutoEncoder_vars, scalar_dic, l1_reg_activations1, l1_reg_activations2 = controlCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
 
         cost = (tf.reduce_mean(tf.compat.v1.losses.softmax_cross_entropy(logits=predictions, onehot_labels=y_placeholder, label_smoothing=params['label_smoothing'])) + 
-            params['L1_regularization_activations1']*l1_reg_activations1 + params['L1_regularization_activations2']*l1_reg_activations2)
+            params['L1_regularization_activations1']*l1_reg_activations1 + params['L1_regularization_activations2']*l1_reg_activations2) +  tf.losses.get_regularization_loss()
 
         correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
