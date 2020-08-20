@@ -69,9 +69,6 @@ class parent_attack:
             adversary_labels = []
 
             self.attack_specification(fmodel)
-            print("\n\n ***size mystery***")
-            print(self.num_attack_examples)
-            print(self.batch_size)
 
             for batch_iter in range(math.ceil(self.num_attack_examples/self.batch_size)):
 
@@ -80,10 +77,7 @@ class parent_attack:
 
                 #Carry out the attack
                 adversarial_images, batch_adversary_labels = self.create_adversarial(execution_batch_data, execution_batch_labels)
-                print(adversary_labels)
                 adversary_labels.extend(batch_adversary_labels)
-                print(adversary_labels)
-                print(np.shape(adversary_labels))
 
                 #Process results of the batched attack
                 for example_iter in range(execution_batch_data.shape[0]):
@@ -98,8 +92,6 @@ class parent_attack:
                             execution_batch_data[example_iter], execution_batch_labels[example_iter], adversarial_images[example_iter], batch_iter*self.batch_size + example_iter, fmodel)
 
             adversary_labels = np.asarray(adversary_labels)
-            print("\n\n ***size mystery***")
-            print(np.shape(adversary_labels))
 
             return adversary_found, adversary_distance, adversaries_array, adversary_labels
 
@@ -131,7 +123,8 @@ class parent_attack:
         
         adversaries_array[results_iter] = adversarial_image
 
-        if self.save_images == True:
+        #Note only 10 adversarial images will be saved for a given attack to reduce memory issues
+        if self.save_images == True and (results_iter<10):
             if adversarial_image.shape[2] == 3:
                 image_to_png = adversarial_image
             elif adversarial_image.shape[2] == 1:
@@ -217,14 +210,15 @@ class transfer_attack_L2(parent_attack):
             print("Evaluating " + str(self.num_attack_examples) + " adversarial example(s)")
 
             #Arrays for storing results of the evaluation
-            adversary_distance = np.zeros([2, self.num_attack_examples])
+            adversary_distance = np.zeros([4, self.num_attack_examples])
 
             for example_iter in range(self.num_attack_examples):
 
                 print("Transfer attack number " + str(example_iter))
                 
-                #Iterate through the two different methods of generating adversaries
-                for base_method_iter in range(2):
+                #Iterate through the four different methods of generating adversaries (two different gradient 
+                # based attacks for each of the main architecture types); the minimally-perturbed attack will be returned
+                for base_method_iter in range(4):
                 
                     adversary_distance = self.iterative_perturbation(fmodel, adversary_distance, example_iter, base_method_iter, unperturbed_image=self.input_data[example_iter], 
                         ground_truth_label=self.input_labels[example_iter], starting_adversary=self.starting_adversaries[base_method_iter, example_iter])
