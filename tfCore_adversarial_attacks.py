@@ -3,10 +3,8 @@
 import tensorflow as tf
 import numpy as np
 import os
-import copy
 import math
 import foolbox
-#import foolbox.ext.native as fbn
 import scipy
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -41,7 +39,7 @@ class parent_attack:
 
     def evaluate_resistance(self):
 
-        logits, _, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
+        logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
         self.mk_dir()
 
@@ -71,6 +69,9 @@ class parent_attack:
             adversary_labels = []
 
             self.attack_specification(fmodel)
+            print("\n\n ***size mystery***")
+            print(self.num_attack_examples)
+            print(self.batch_size)
 
             for batch_iter in range(math.ceil(self.num_attack_examples/self.batch_size)):
 
@@ -79,7 +80,10 @@ class parent_attack:
 
                 #Carry out the attack
                 adversarial_images, batch_adversary_labels = self.create_adversarial(execution_batch_data, execution_batch_labels)
-                adversary_labels.append(batch_adversary_labels)
+                print(adversary_labels)
+                adversary_labels.extend(batch_adversary_labels)
+                print(adversary_labels)
+                print(np.shape(adversary_labels))
 
                 #Process results of the batched attack
                 for example_iter in range(execution_batch_data.shape[0]):
@@ -94,6 +98,8 @@ class parent_attack:
                             execution_batch_data[example_iter], execution_batch_labels[example_iter], adversarial_images[example_iter], batch_iter*self.batch_size + example_iter, fmodel)
 
             adversary_labels = np.asarray(adversary_labels)
+            print("\n\n ***size mystery***")
+            print(np.shape(adversary_labels))
 
             return adversary_found, adversary_distance, adversaries_array, adversary_labels
 
@@ -129,7 +135,6 @@ class parent_attack:
             if adversarial_image.shape[2] == 3:
                 image_to_png = adversarial_image
             elif adversarial_image.shape[2] == 1:
-                #cmap=plt.cm.gray
                 image_to_png = np.squeeze(adversarial_image, axis=2) #Remove last dimension if saving to greyscale
 
             plt.imsave('adversarial_images/' + self.output_directory + '/' + 
@@ -154,39 +159,33 @@ class check_stochasticity(parent_attack):
 
     def perform_check(self):
 
-            logits, _, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic)
-            saver = tf.train.Saver(self.var_list)
+        logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
+        saver = tf.train.Saver(self.var_list)
 
-            with tf.Session() as session:
-                saver.restore(session, self.model_weights) 
-                fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
+        with tf.Session() as session:
+            saver.restore(session, self.model_weights) 
+            fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
 
-                print('Checking the models performance on multiple runs of the same images')
+            print('Checking the models performance on multiple runs of the same images')
 
-                for example_iter in range(self.num_attack_examples):
+            for example_iter in range(self.num_attack_examples):
 
-                    execution_data = self.input_data[example_iter, :, :, :]
+                execution_data = self.input_data[example_iter, :, :, :]
 
-                    logits_list = []
-                    labels_list = []
+                logits_list = []
+                labels_list = []
 
-                    #Check the same image with multiple runs
-                    for ii in range(10):
-                        #Return the logits and label of the model
-                        predicted_logits = fmodel.forward(execution_data)
-                        print(predicted_logits)
-                        # print(predicted_logits[0][0])
-                        # print(np.dtype(predicted_logits[0][0]))
-                        predicted_label = np.argmax(predicted_logits)
-                        logits_list.append(predicted_logits)
-                        labels_list.append(predicted_label)
-                        
-                    #Check every element is equivalent to the most recent prediction
-                    assert np.all(logits_list == np.asarray(predicted_logits)), "***Some of the logits are changing stochastically***"
-                    assert np.all(labels_list == np.asarray(predicted_label)), "***Some of the labels are changing stochastically***"
-
-                    print("No stochastic elements identified")
+                #Check the same image with multiple runs
+                for ii in range(10):
+                    #Return the logits and label of the model
+                    predicted_logits = fmodel.forward(execution_data[None,:,:,:])
+                    logits_list.extend(predicted_logits)
                     
+                #Check every element is equivalent to the most recent prediction
+                assert np.all(logits_list == np.asarray(predicted_logits)), "***Some of the logits are changing stochastically***"
+
+                print("No stochastic elements identified")
+                
 
 class transfer_attack_L2(parent_attack):
     #Overwrite parent constructor for two additional attributes : starting_adversaries, epsilon_step_size, and max_iterations
@@ -204,7 +203,7 @@ class transfer_attack_L2(parent_attack):
     #Overwrite evaluate_resistance method with one that finds minimal transfer-attack images
     def evaluate_resistance(self):
 
-        logits, _, _, _, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
+        logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
         saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
         self.mk_dir()
 
@@ -255,14 +254,11 @@ class transfer_attack_L2(parent_attack):
             #Begin with an *unperturbed* image, as this may already be enough to fool the target model
             transfer_perturbed = unperturbed_image
             
-            #plt.imsave("Original" + str(example_iter) + ".png", np.squeeze(unperturbed_image, axis=2), cmap='gray')
-
             print("Original classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None]))))
             print("Ground truth label is " + str(np.argmax(ground_truth_label)))
 
 
-
-            # *** binary search as used in Schott et al ****
+            # Binary search for transfer attack as used in Schott et al
             direction = starting_adversary - unperturbed_image
             bad = 0
             good = None
@@ -289,7 +285,6 @@ class transfer_attack_L2(parent_attack):
                 print("Exponential search failed")
                 adversary_distance[base_method_iter, example_iter] = np.inf
                 print("The distance is " + str(adversary_distance[base_method_iter, example_iter]))
-                
 
             else:
                 for _ in range(k):
@@ -305,57 +300,6 @@ class transfer_attack_L2(parent_attack):
                 adversary_distance[base_method_iter, example_iter], _ = self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())
                 print("After standard binary search, the classification is " + str(np.argmax(fmodel.forward(transfer_perturbed[None]))))
                 print("The distance is " + str(adversary_distance[base_method_iter, example_iter]))
-
-
-
-            # #While not misclassified or exceeding the maximum number of iterations, continue to perturb the image
-            # while not ((np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label)) or (current_iteration >= self.max_iterations)):
-                
-            #     # *** original, naive version ****
-            #     epsilon += self.epsilon_step_size
-            #     #print(epsilon)
-            #     current_iteration += 1
-
-            #     transfer_perturbed = unperturbed_image + epsilon*(starting_adversary - unperturbed_image)
-
-
-
-
-
-            #     #print("Current distance is " + str(self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())))
-
-            #     # if abs(epsilon - 1.0) <= 0.005:
-            #     #     # print(current_iteration)
-            #     #     # print(epsilon)
-            #     #     # print(np.shape(transfer_perturbed))
-            #     #     # print(transfer_perturbed[:,0,0])
-            #     #     # print(starting_adversary[:,0,0])
-            #     #     assert np.all(transfer_perturbed == starting_adversary), "Perturbed image does not match starting adversary when original noise added."
-
-            #     transfer_perturbed = np.clip(transfer_perturbed, 0, 1)
-
-            #     #Check if all the values of the image are maximally perturbed, in which case break; note if the adversarial is misclassified, the true distance will be picked up later
-            #     if np.all((transfer_perturbed==0) | (transfer_perturbed==1))==True:
-            #         print("\n***Maximally perturbed transfer image, but still not misclassified\n")
-            #         adversary_distance[base_method_iter, example_iter] = np.inf
-            #         break
-
-            # print("Number of iterations performed: " + str(current_iteration))
-
-            # if current_iteration >= self.max_iterations and np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) == np.argmax(ground_truth_label):
-            #     print("\n***Maximum specified iterations for transfer attack performed, but still not misclassified\n")
-            #     adversary_distance[base_method_iter, example_iter] = np.inf
-
-            # print("Classification after transfer attack: " + str(np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :]))))
-
-            # #plt.imsave("Base_adversary" + str(example_iter) + "_base_method_" + str(base_method_iter) + ".png", np.squeeze(starting_adversary, axis=2), cmap='gray')
-            # #plt.imsave("Transfer_adversary" + str(example_iter) + "_base_method_" + str(base_method_iter) + ".png", np.squeeze(transfer_perturbed, axis=2), cmap='gray')
-
-            # #If neither of the above escape situations occured (i.e. misclassification was successful)
-            # if np.argmax(fmodel.forward(transfer_perturbed[None, :, :, :])) != np.argmax(ground_truth_label):
-            #     adversary_distance[base_method_iter, example_iter], _ = self.distance_metric(unperturbed_image.flatten(), transfer_perturbed.flatten())
-            # else:
-            #     adversary_distance[base_method_iter, example_iter] = np.inf
 
         return adversary_distance
 
@@ -389,28 +333,6 @@ class gaussian_noise_attack(parent_attack):
     attack_method = foolbox.attacks.AdditiveGaussianNoiseAttack
     attack_type_dir = 'Gaussian_noise'
 
-#Note the Schott transfer attack is not capable of batched-attacks
-# class Schott_transfer_attack_L2(parent_attack):
-#     #Overwrite parent constructor for additional attributes
-#     def __init__(self, attack_dic,
-#                     criterion=foolbox.criteria.Misclassification(), 
-#                     starting_adversaries=starting_adversaries):
-#             parent_attack.__init__(self, attack_dic,
-#                     criterion)
-#             self.starting_adversaries = starting_adversaries
-    
-#     attack_method = BinarySearchTransferAttack
-#     attack_type_dir = 'Schott_transfer_L2'
-
-#     #Overwrite create adversarial method, as the transfer attack requires the starting adversary
-#     def create_adversarial(self, execution_data, execution_label, starting_adversaries):
-
-#             adversarial_images = self.attack_fmodel(input_or_adv=execution_data, label=execution_label,
-#                 source_adversarial=self.starting_adversaries)
-
-#             return adversarial_images
-
-
 class pointwise_attack_L2(parent_attack):
     #Note this version of the point-wise attack inherits the L2 distance metric from the parent class
     attack_method = foolbox.attacks.PointwiseAttack
@@ -442,14 +364,6 @@ class spatial_attack(parent_attack):
     attack_method = foolbox.attacks.SpatialAttack
     attack_type_dir = 'Spatial'
 
-# class brendel_bethge_attack_L2(parent_attack):
-#     attack_method = fbn.attacks.L2BrendelBethgeAttack
-#     attack_type_dir = 'BrendelBethge'
-
-#     #Note doesn't take a misclassification criterion argument, so over-write attack_specification method
-#     def attack_specification(self, fmodel):
-#         self.attack_fmodel = self.attack_method(model=fmodel)
-
 class boundary_attack(parent_attack):
     #Overwrite parent constructor for two additional attributes : num_iterations and log_every_n_steps
     def __init__(self, attack_dic,
@@ -474,13 +388,6 @@ class boundary_attack(parent_attack):
         adversarial_images = np.asarray([a.perturbed for a in adversarials])
 
         return adversarial_images, adversary_labels
-
-class hop_skip_attack_L2(boundary_attack):
-    #Note inhereits init and create_adversarial from boundary_attack
-    attack_method = foolbox.attacks.HopSkipJumpAttack
-    attack_type_dir = 'HopSkip_L2'
-
-
 
 
 #*** L-Inf Distance Attacks ***
@@ -515,14 +422,4 @@ class MIM_attack(FGSM_attack):
     attack_method = foolbox.attacks.MomentumIterativeAttack
     attack_type_dir = 'MIM'
 
-class hop_skip_attack_LInf(boundary_attack):
-    #Note inhereits init and create_adversarial from boundary_attack
-    attack_method = foolbox.attacks.HopSkipJumpAttack
-    attack_type_dir = 'HopSkip_LInf'
-    foolbox_distance_metric = foolbox.distances.Linfinity
-
-    def distance_metric(self, vector1, vector2):
-        distance = scipy.spatial.distance.chebyshev(vector1, vector2)
-        distance_name = 'Chebyshev (L-Inf)'
-        return distance, distance_name
 
