@@ -200,10 +200,10 @@ def initializer_fun(params, training_data, training_labels):
             'output_W' : tf.compat.v1.get_variable('OW', shape=(params['MLP_layer_2_dim'], 10), initializer=initializer)
             }
             if (params['architecture'] == 'BindingVGG') or (params['architecture'] == 'controlVGG'):
-                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(16*16*64, params['MLP_layer_1_dim']), initializer=initializer)
-                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(16*16*32, params['MLP_layer_1_dim']), initializer=initializer)
-                weights['course_bindingW2'] = tf.compat.v1.get_variable('courseW2', shape=(8*8*128, params['MLP_layer_1_dim']), initializer=initializer)
-                weights['finegrained_bindingW2'] = tf.compat.v1.get_variable('fineW2', shape=(8*8*64, params['MLP_layer_1_dim']), initializer=initializer)
+                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(16*16*64, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
+                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(16*16*32, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
+                weights['course_bindingW2'] = tf.compat.v1.get_variable('courseW2', shape=(8*8*128, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
+                weights['finegrained_bindingW2'] = tf.compat.v1.get_variable('fineW2', shape=(8*8*64, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
 
             biases = {
             'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(32), initializer=initializer),
@@ -837,14 +837,14 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
         correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
         total_accuracy = tf.reduce_sum(tf.cast(correct_prediction, tf.float32)) #Used to store batched accuracy for evaluating on the entire test dataset
-        
+    
     elif params['meta_architecture'] == 'SAE':
         predictions, reconstruction_logits = AutoEncoder(x_placeholder, dropout_rate_placeholder, weights, biases, decoder_weights, 
             dynamic_dic=params['dynamic_dic'], prediction_fun=params['architecture']+'_predictions') 
-       
+
         cost = (params['predictive_weighting'] * tf.reduce_mean(tf.compat.v1.losses.softmax_cross_entropy(logits=predictions, onehot_labels=y_placeholder, 
             label_smoothing=params['label_smoothing'])) 
-            + tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.dtypes.cast(x_placeholder, dtype=tf.float32), logits=reconstruction_logits))) 
+            + tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.dtypes.cast(x_placeholder, dtype=tf.float32), logits=reconstruction_logits)))
 
         correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
@@ -885,6 +885,9 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
                 datagen = ImageDataGenerator(width_shift_range=params['shift_range'], height_shift_range=params['shift_range'], horizontal_flip=True)
                 for batch_x, batch_y in datagen.flow(training_data, training_labels, batch_size=params['batch_size']):
                     batches += 1
+
+                    if params['Gaussian_noise'] != None:
+                        batch_x = np.clip(batch_x + np.random.normal(0, scale=params['Gaussian_noise'], size=np.shape(batch_x)), 0, 1)
                     if batches >= len(training_labels)/params['batch_size']:
                         break
 
