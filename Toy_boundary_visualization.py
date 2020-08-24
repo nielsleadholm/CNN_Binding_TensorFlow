@@ -112,7 +112,7 @@ def generate_toy_data(data_size, data_set, additional_features_dimension, traini
 
         #Note the change in means and the use of additional_features_dimension
         imperfect_features_zero_class = np.random.normal(0, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
-        imperfect_features_one_class = np.random.normal(0.5, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
+        imperfect_features_one_class = np.random.normal(0.65, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
 
         #print(imperfect_features_zero_class.shape)
 
@@ -128,10 +128,6 @@ def generate_toy_data(data_size, data_set, additional_features_dimension, traini
             (np.concatenate((np.ones(shape=(int(data_size/2),1)), np.zeros(shape=(int(data_size/2),1))), axis=1),
             np.concatenate((np.zeros(shape=(int(data_size/2),1)), np.ones(shape=(int(data_size/2),1))), axis=1)), 
             axis=0)
-
-        # print(one_hot_labels.shape)
-        # print(x_data)
-        # print(one_hot_labels)
 
         x_data, one_hot_labels = randomize_order(x=x_data, y=one_hot_labels)
 
@@ -460,11 +456,6 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
 
     training_data, training_labels = generate_toy_data(model_params['data_size'], model_params['data_set'], 
         model_params['additional_features_dimension'], training_data_bool=True, noise=model_params['Gaussian_noise'])
-    
-    # print(training_data)
-    # print(training_labels.shape)
-    # print(training_labels)
-
 
     testing_data, testing_labels = generate_toy_data(adversarial_params['num_attack_examples'], model_params['data_set'], 
         model_params['additional_features_dimension'], training_data_bool=False, noise=None)
@@ -513,7 +504,7 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
      weights, biases, var_list, model_params, network_iter)
 
 
-    iter_dic.update({'training_accuracy':float(training_acc), 'testing_accuracy':float(testing_acc)})
+    iter_dic.update({'co_dim': model_params['additional_zero_dimensions'], 'training_accuracy':float(training_acc), 'testing_accuracy':float(testing_acc)})
 
     update_dic, adver_pred_dic, adver_data_dic = carry_out_attacks(model_params=model_params, adversarial_params=adversarial_params, 
         pred_function=pred_function, input_data=testing_data, input_labels=testing_labels, 
@@ -597,6 +588,16 @@ if __name__ == '__main__':
 
     all_results_df=pd.DataFrame({})
 
-    for network_iter in range(model_params['num_networks']):
+    total_dim = 20
 
-        all_results_df = generate_toy_visual(model_params, adversarial_params, network_iter, attack_for_visual, all_results_df)
+    for codim_iter in range(total_dim+1):
+
+        model_params['additional_features_dimension']=codim_iter
+        model_params['additional_zero_dimensions']=total_dim-codim_iter
+
+        # print("Features:" + str(model_params['additional_features_dimension']))
+        # print("Zeros:" + str(model_params['additional_zero_dimensions']))
+
+        for network_iter in range(model_params['num_networks']):
+
+            all_results_df = generate_toy_visual(model_params, adversarial_params, network_iter, attack_for_visual, all_results_df)
