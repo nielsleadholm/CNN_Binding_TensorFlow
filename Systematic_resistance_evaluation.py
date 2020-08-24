@@ -6,11 +6,11 @@ import os
 import tfCore_adversarial_attacks as atk
 import mltest
 import math
+import yaml
 import pandas as pd
 import time
 import foolbox
 import CNN_module as CNN
-import Adversarial_training
 
 def iterative_evaluation(model_params, adversarial_params, training_data, training_labels, evaluation_data, evaluation_labels):
 
@@ -22,12 +22,12 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 		
 		training_pretime = time.time()
 
-		x_placeholder, y_placeholder, dropout_rate_placeholder, var_list, weights, biases, decoder_weights = CNN.initializer_fun(model_params, training_data, training_labels)
+		x_placeholder, y_placeholder, dropout_rate_placeholder, var_list, weights, biases = CNN.initializer_fun(model_params, training_data, training_labels)
 
 		if (model_params['train_new_network'] == True):
 			print("\nTraining new network...")
 			training_accuracy, eval_accuracy, network_name_str, eval_sparsity = CNN.network_train(model_params, iter_num, var_list, training_data, 
-				training_labels, evaluation_data, evaluation_labels, weights, biases, decoder_weights, x_placeholder=x_placeholder, 
+				training_labels, evaluation_data, evaluation_labels, weights, biases, x_placeholder=x_placeholder, 
 			    y_placeholder=y_placeholder, dropout_rate_placeholder=dropout_rate_placeholder)
 
 			testing_sparsity_float = [dict([key, float(value)] for key, value in eval_sparsity.items())] 
@@ -99,7 +99,7 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 				testing_total_time = time.time() - testing_pretime
 				print("Elapsed time for evaluating all test examples is " + str(testing_total_time))
 
-				#On small-memory data-sets, check layer-wise sparsity on all testing data
+				#On small-memory models, check layer-wise sparsity on all testing data
 				if model_params['dataset']!='cifar10':
 					testing_sparsity = sess.run(scalar_dic, feed_dict={x_placeholder: testing_data, y_placeholder: testing_labels, dropout_rate_placeholder : 0.0})
 
@@ -145,41 +145,19 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 		all_results_df.to_csv('Results.csv')
 
 #Create the necessary adversarial examples on a surrogate model to enable performing a transfer attack
-def transfer_attack_setup(adversarial_params, evaluation_data, evaluation_labels, training_data, training_labels):
+def transfer_attack_setup(model_params, adversarial_params, evaluation_data, evaluation_labels, training_data, training_labels):
 
-	surrogate_params = {
-		'architecture':'LeNet',
-		'dynamic_dic':{'dynamic_var':'None', 
-			'sparsification_kwinner':0.1},
-		'dataset':'mnist',
-	    'learning_rate':0.001,
-		'train_new_network':True,
-		'crossval_bool':True,
-		'check_stochasticity':False,
-		'num_network_duplicates':1,
-	    'training_epochs':45,
-	    'Gaussian_noise':None,
-	    'salt&pepper_noise':None,
-	    'dropout_rate':0.25,
-	    'He_modifier':1.0,
-	    'shift_range':0.1,
-	    'label_smoothing':0.1,
-	    'MLP_layer_1_dim':256,
-	    'MLP_layer_2_dim':128,
-	    'L2_regularization_scale':0.00001,
-	    'batch_size':128,
-	    'test_suite_bool':False
-		}
+	surrogate_params = model_params
 
 	(surrogate_x_placeholder, surrogate_y_placeholder, surrogate_dropout_rate_placeholder, 
-		surrogate_var_list, surrogate_weights, surrogate_biases, surrogate_decoder_weights) = CNN.initializer_fun(surrogate_params, training_data, training_labels)
+		surrogate_var_list, surrogate_weights, surrogate_biases) = CNN.initializer_fun(surrogate_params, training_data, training_labels)
 
 	#Note the surrogate network is indexed with 'iter_num' 999
 	if surrogate_params['train_new_network'] == True:
 		print("\n Training a surrogate network for transfer attacks...")
 		iter_num = 999
 		training_accuracy, eval_accuracy, network_name_str, eval_sparsity = CNN.network_train(surrogate_params, iter_num, surrogate_var_list, training_data, 
-			training_labels, evaluation_data, evaluation_labels, surrogate_weights, surrogate_biases, surrogate_decoder_weights, x_placeholder=surrogate_x_placeholder, 
+			training_labels, evaluation_data, evaluation_labels, surrogate_weights, surrogate_biases, x_placeholder=surrogate_x_placeholder, 
 		    y_placeholder=surrogate_y_placeholder, dropout_rate_placeholder=surrogate_dropout_rate_placeholder)
 
 	else:
@@ -238,7 +216,6 @@ def transfer_attack_setup(adversarial_params, evaluation_data, evaluation_labels
 
 def carry_out_attacks(model_params, adversarial_params, pred_function, input_data, input_labels, x_placeholder, var_list, weights, biases, network_name_str, iter_num, dynamic_dic):
 
-	#Create directory for storing images
 	if os.path.exists('adversarial_images/') == 0:
 		os.mkdir('adversarial_images/')
 
@@ -256,14 +233,14 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
                 'dynamic_dic':dynamic_dic,
                 'batch_size':model_params['batch_size'],
                 'save_images':adversarial_params['save_images'],
-                'estimate_gradients':adversarial_params['estimate_gradients']}
+                'estimate_gradients':False}
 
 	network_dic_distances = {} #Hold the attack specific distances results for a given network
 	network_dic_adver_accuracies = {} #As above but for accuracies on adversarial examples
 
 	L0_running_min = [] #Keep track of the minimum adversarial perturbation required for each image
-	LInf_running_min = [] #Keep track of the minimum adversarial perturbation required for each image
-	L2_running_min = [] #Keep track of the minimum adversarial perturbation required for each image
+	LInf_running_min = [] 
+	L2_running_min = []
 
 	print("\n\n***Performing L-0 Distance Attacks***\n")
 
@@ -300,6 +277,19 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	LInf_running_min = adversary_distance
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
+	if adversarial_params['estimate_gradients'] == True:
+		attack_name = 'FGSM_estimated'
+		attack_dic['estimate_gradients'] = True #set boolean for passing into attack
+		
+		FGSM = atk.FGSM_attack(attack_dic)
+		adversary_found, adversary_distance, adversaries_array, adversary_labels = FGSM.evaluate_resistance()
+		network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+			perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
+		LInf_running_min = adversary_distance
+		np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+		attack_dic['estimate_gradients'] = False #reset
+
 	#LInf transfer attack
 	starting_adversaries = np.asarray((np.load('transfer_images/standard_network/FGSM.npy'), 
 		np.load('transfer_images/standard_network/BIM_LInf.npy'), 
@@ -308,7 +298,7 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	attack_name = 'transfer_LInf'
 	transferLInf = atk.transfer_attack_LInf(attack_dic, starting_adversaries)
 	adversary_distance = transferLInf.evaluate_resistance()
-	adversary_labels = []
+	adversary_labels = [] #dummy variable
 	network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
 		perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
 	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
@@ -322,6 +312,19 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
+	if adversarial_params['estimate_gradients'] == True:
+		attack_name = 'BIM_LInf_estimated'
+		attack_dic['estimate_gradients'] = True #set boolean for passing into attack
+
+		BIM_LInf = atk.BIM_Linfinity_attack(attack_dic)
+		adversary_found, adversary_distance, adversaries_array, adversary_labels = BIM_LInf.evaluate_resistance()
+		network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+			perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
+		LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
+		np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+		attack_dic['estimate_gradients'] = False
+
 	attack_name = 'DeepFool_LInf'
 	DeepFool_LInf = atk.DeepFool_LInf_attack(attack_dic)
 	adversary_found, adversary_distance, adversaries_array, adversary_labels = DeepFool_LInf.evaluate_resistance()
@@ -330,6 +333,19 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 	
+	if adversarial_params['estimate_gradients'] == True:
+		attack_name = 'DeepFool_LInf_estimated'
+		attack_dic['estimate_gradients'] = True #set boolean for passing into attack
+
+		DeepFool_LInf = atk.DeepFool_LInf_attack(attack_dic)
+		adversary_found, adversary_distance, adversaries_array, adversary_labels = DeepFool_LInf.evaluate_resistance()
+		network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+			perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
+		LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
+		np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+		
+		attack_dic['estimate_gradients'] = False
+
 	attack_name = 'MIM'
 	MIM = atk.MIM_attack(attack_dic)
 	adversary_found, adversary_distance, adversaries_array, adversary_labels = MIM.evaluate_resistance()
@@ -337,6 +353,19 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 		perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
 	LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+	if adversarial_params['estimate_gradients'] == True:
+		attack_name = 'MIM_estimated'
+		attack_dic['estimate_gradients'] = True #set boolean for passing into attack
+
+		MIM = atk.MIM_attack(attack_dic)
+		adversary_found, adversary_distance, adversaries_array, adversary_labels = MIM.evaluate_resistance()
+		network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+			perturbation_threshold=adversarial_params['perturbation_threshold']['LInf'])
+		LInf_running_min = np.minimum(LInf_running_min, adversary_distance)
+		np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+		attack_dic['estimate_gradients'] = False
 
 	print("\nResults across all LInf attacks...")
 	attack_name = 'all_LInf'
@@ -363,7 +392,7 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	attack_name = 'transfer_L2'
 	transferL2 = atk.transfer_attack_L2(attack_dic, starting_adversaries)
 	adversary_distance = transferL2.evaluate_resistance()
-	adversary_labels = []
+	adversary_labels = [] #dummy variable
 	network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
 		perturbation_threshold=adversarial_params['perturbation_threshold']['L2'])
 	L2_running_min = np.minimum(L2_running_min, adversary_distance)
@@ -385,6 +414,19 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	L2_running_min = np.minimum(L2_running_min, adversary_distance)
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
+	if adversarial_params['estimate_gradients'] == True:
+		attack_name = 'FGM_estimated'
+		attack_dic['estimate_gradients'] = True #set boolean for passing into attack
+
+		FGM = atk.FGM_attack(attack_dic)
+		adversary_found, adversary_distance, adversaries_array, adversary_labels = FGM.evaluate_resistance()
+		network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+			perturbation_threshold=adversarial_params['perturbation_threshold']['L2'])
+		L2_running_min = np.minimum(L2_running_min, adversary_distance)
+		np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+		attack_dic['estimate_gradients'] = False
+
 	attack_name = 'BIM_L2'
 	BIM_L2 = atk.BIM_L2_attack(attack_dic)
 	adversary_found, adversary_distance, adversaries_array, adversary_labels = BIM_L2.evaluate_resistance()
@@ -393,6 +435,19 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 	L2_running_min = np.minimum(L2_running_min, adversary_distance)
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
 
+	if adversarial_params['estimate_gradients'] == True:
+		attack_name = 'BIM_L2_estimated'
+		attack_dic['estimate_gradients'] = True #set boolean for passing into attack
+
+		BIM_L2 = atk.BIM_L2_attack(attack_dic)
+		adversary_found, adversary_distance, adversaries_array, adversary_labels = BIM_L2.evaluate_resistance()
+		network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+			perturbation_threshold=adversarial_params['perturbation_threshold']['L2'])
+		L2_running_min = np.minimum(L2_running_min, adversary_distance)
+		np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+		attack_dic['estimate_gradients'] = False
+
 	attack_name = 'DeepFool_L2'
 	DeepFool_L2 = atk.DeepFool_L2_attack(attack_dic)
 	adversary_found, adversary_distance, adversaries_array, adversary_labels = DeepFool_L2.evaluate_resistance()
@@ -400,6 +455,19 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 		perturbation_threshold=adversarial_params['perturbation_threshold']['L2'])
 	L2_running_min = np.minimum(L2_running_min, adversary_distance)
 	np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+	if adversarial_params['estimate_gradients'] == True:
+		attack_name = 'DeepFool_L2_estimated'
+		attack_dic['estimate_gradients'] = True #set boolean for passing into attack
+
+		DeepFool_L2 = atk.DeepFool_L2_attack(attack_dic)
+		adversary_found, adversary_distance, adversaries_array, adversary_labels = DeepFool_L2.evaluate_resistance()
+		network_dic_distances[attack_name + '_distances'], network_dic_adver_accuracies[attack_name + '_accuracy'] = analysis(adversary_distance, adversary_labels, 
+			perturbation_threshold=adversarial_params['perturbation_threshold']['L2'])
+		L2_running_min = np.minimum(L2_running_min, adversary_distance)
+		np.savetxt('adversarial_images/' + network_name_str + '/' + attack_name + '_distances.txt', adversary_distance)
+
+		attack_dic['estimate_gradients'] = False
 
 	attack_name = 'boundary'
 	boundary = atk.boundary_attack(attack_dic,
@@ -423,7 +491,6 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
 #Find the proportion of examples above a given threshold
 def threshold_accuracy(perturbation_threshold, adversary_distance):
 
-	#Boolean mask where adversary distances is above the threshold
 	threshold_exceeded = (adversary_distance > perturbation_threshold)
 	threshold_acc = np.sum(threshold_exceeded)/len(adversary_distance)
 
@@ -440,74 +507,22 @@ def analysis(adversary_distance, adversary_labels, perturbation_threshold):
 
 
 if __name__ == '__main__':
+	
+	with open('config_BindingCNNs.yaml') as f:
+		params = yaml.load(f, Loader=yaml.FullLoader)
 
-	#Parameters determining the networks that will be trained and evaluated
-	#Architecture choices are LeNet, BindingCNN, MadryCNN, VGG, and BindingVGG
-	#dynamic_var allows for temporary changes to a model's forward pass, such as adding stochasticity or ablating layers; see CNN_module for details
-	#Options for dynamic_var are:
-		# "Add_logit_noise"
-		# "Ablate_unpooling"
-		# "Ablate_gradient_unpooling"
-		# "Ablate_binding" (both unpooling and gradient unpooling)
-		# "Ablate_maxpooling"
-		# "kloser_gradients" # In gradient unpooling, use the k-smallest gradients for deriving the mask
-	#sparsification_kwinner determines the sparsity of gradient unpooling activations (select a value between 0 and 1); note the actual
-	# binding activation sparsity may differ (specifically be more sparse) depending on how sparse the activations are before the gradient unpooling operation
-	#Gaussian noise - set to either None or the value of desired std to add noise to training data
-	#He_modifier: multiplicative factor by which the initialized weights are scaled; note the scalar value selected here is multiplied
-	# by 2.0 (the value used in the original publication) before scaling the weights; therefore use 1.0 for default
-	#shift_range determines shifting used in CIFAR-10 data-augmentationl; for a typical value, use 0.1
-	#MLP_layer dim determines the size of the first (1) and second (2) MLP layers used in both the basic and VGG architectures 
-	#L2_regularization (if non-zero), is only applied to the weights projecting from the binding (unpool and gradient unpool) layers
-	#test_suite_bool, if True, runs a series of tests using the 'mltest' suite (e.g. for Inf and NaN values in the network)
-	model_params = {
-		'architecture':'BindingCNN',
-		'dynamic_dic':{'dynamic_var':'None', 
-			'sparsification_kwinner':0.1},
-		'dataset':'mnist',
-	    'learning_rate':0.001,
-		'train_new_network':False,
-		'crossval_bool':True,
-		'check_stochasticity':False,
-		'num_network_duplicates':2,
-	    'training_epochs':5,
-	    'Gaussian_noise':None,
-	    'salt&pepper_noise':None,
-	    'dropout_rate':0.25,
-	    'He_modifier':1.0,
-	    'shift_range':0.1,
-	    'label_smoothing':0.1,
-	    'MLP_layer_1_dim':120,
-	    'MLP_layer_2_dim':84,
-	    'L2_regularization_scale':0.00001,
-	    'batch_size':128,
-	    'test_suite_bool':False
-		}
+	model_params = params['model_params']
+	adversarial_params = params['adversarial_params']
 
-	#Parameters determining the adversarial attacks
-	#perturbation_threshold defines the threshold of the L-0, L-inf, and L-2 distances at which accuracy is evaluated
-	adversarial_params = {
-		'num_attack_examples':20,
-		'transfer_attack_setup':False,
-		'estimate_gradients':False,
-	    'boundary_attack_iterations':50,
-	    'boundary_attack_log_steps':1000,
-	    'perturbation_threshold':{'L0':12, 'LInf':0.3,  'L2':1.5},
-	    'save_images':True
-	    }
-
-	#Confirm chosen hyperparameters
 	print("\n Model hyper-parameters:")
 	print(model_params)
-
-	#Confirm chosen hyperparameters
 	print("\n Adversarial hyper-parameters:")
 	print(adversarial_params)
 
-	#Specify training and cross-validation data
+	#Specify training and cross-validation/test data
 	(training_data, training_labels, testing_data, testing_labels, crossval_data, crossval_labels) = CNN.data_setup(model_params)
 
-	#Option to run the training and adversarial testing with a cross-validation data-set, rather than the true test dataset
+	#Option to run the training with a cross-validation data-set
 	if model_params['crossval_bool'] == True:
 		evaluation_data = crossval_data
 		evaluation_labels = crossval_labels
@@ -516,7 +531,8 @@ if __name__ == '__main__':
 		evaluation_labels = testing_labels
 
 	if adversarial_params['transfer_attack_setup'] == True:
-		transfer_attack_setup(adversarial_params, evaluation_data, evaluation_labels, training_data, training_labels)
+		#Note the parameters of the surrogate architecture will use 'model_params'
+		transfer_attack_setup(model_params, adversarial_params, evaluation_data, evaluation_labels, training_data, training_labels)
 
 	else:
 		pre = time.time()

@@ -1,0 +1,48 @@
+--- 
+  #Parameters determining the networks that will be trained and evaluated
+ model_params:
+  architecture : 'LeNet' #choices are LeNet, BindingCNN, MadryCNN, VGG, and BindingVGG
+  dynamic_dic:
+    dynamic_var: null #allows for temporary changes to a model's forward pass, such as adding stochasticity or ablating layers; see CNN_module for details
+                      # options for dynamic_var are:
+                          # "Add_logit_noise"
+                          # "Ablate_unpooling"
+                          # "Ablate_gradient_unpooling"
+                          # "Ablate_binding" (both unpooling and gradient unpooling)
+                          # "Ablate_maxpooling"
+                          # "kloser_gradients" # In gradient unpooling, use the k-smallest gradients for deriving the mask; will also ablate unpooling
+    sparsification_kwinner: 0.4 #determines the sparsity of gradient unpooling activations (select a value between 0 and 1); note the actual
+                                # binding activation sparsity may differ (specifically be more sparse) depending on how sparse the activations are before the gradient unpooling operation
+                                # recommend 0.4 for MNIST and 0.1 for CIFAR-10
+  dataset: 'mnist' #choices are mnist or cifar10
+  learning_rate: 0.001 #recommend 0.001 for small CNNs/mnist, 0.0005 for VGG/cifar10
+  train_new_network: False
+  crossval_bool: True #if true, uses cross-validation data-set
+  check_stochasticity: False #check the model for unintended stochasticity in logits
+  num_network_duplicates: 2
+  training_epochs: 5
+  Gaussian_noise: null #for mnist, recommend 0.3; set to null if not desired
+  salt&pepper_noise: null #for mnist, recommend 120; set to null if not desired
+  dropout_rate: 0.25 #recommend 0.25
+  He_modifier: 1.0 #1.0 is equivalent to default He initialization
+  shift_range: 0.1 #determines shifting used in CIFAR-10 data-augmentationl; recommend 0.1
+  label_smoothing: 0.1 #recommend 0.1
+  MLP_layer_1_dim: 120 #determines the size of the first (1) and second (2) MLP layers used in both the basic and VGG architectures 
+  MLP_layer_2_dim: 84
+  L2_regularization_scale_maxpool: 0.0
+  L2_regularization_scale_binding: 0.0
+  batch_size: 128
+  test_suite_bool: False #if True, runs a series of tests using the 'mltest' suite (e.g. for Inf and NaN values in the network)
+  
+  #Parameters determining the adversarial attacks
+ adversarial_params:
+  num_attack_examples: 3
+  transfer_attack_setup: False #create and save adversarial exampels for use in transfer attacks
+  estimate_gradients: True #use FoolBox's gradient estimator; in addition still performs gradient-based attacks without gradient estimation 
+  boundary_attack_iterations: 250
+  boundary_attack_log_steps: 1000
+  save_images: False
+  perturbation_threshold: #L-p distance threshold used for calculating the accuracy of models under attack
+    L0 : 12
+    LInf : 0.3
+    L2 : 1.5

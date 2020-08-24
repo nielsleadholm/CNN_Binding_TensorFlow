@@ -55,8 +55,7 @@ class parent_attack:
                 print("\nUsing a model with *estimated* gradients.")
                 estimator = foolbox.gradient_estimators.CoordinateWiseGradientEstimator(epsilon=0.01)
                 fmodel = foolbox.models.ModelWithEstimatedGradients(fmodel, gradient_estimator=estimator)
-                #The default CoordinateWiseGradientEstimator estimator is the same used in the Schott et al, 2018 ABS paper
-
+                #The default CoordinateWiseGradientEstimator estimator is the same used in the Schott et al, 2019 ABS paper from ICLR
 
             print("\nPerforming " + self.attack_type_dir + " attack")
             print("Evaluating " + str(self.num_attack_examples) + " adversarial example(s)")
@@ -123,7 +122,7 @@ class parent_attack:
         
         adversaries_array[results_iter] = adversarial_image
 
-        #Note only 10 adversarial images will be saved for a given attack to reduce memory issues
+        #Note only 10 adversarial images are saved for a given attack to reduce memory issues
         if self.save_images == True and (results_iter<10):
             if adversarial_image.shape[2] == 3:
                 image_to_png = adversarial_image
@@ -148,7 +147,7 @@ class parent_attack:
         return distance, distance_name
 
 class check_stochasticity(parent_attack):
-    #Performs checks to ensure there are no unintended stochastic elements (e.g. due to floating point changes) in a models predictions in foolbox
+    #Performs checks to ensure there are no unintended stochastic elements (e.g. due to numerical issues) in a models predictions in foolbox
 
     def perform_check(self):
 
@@ -216,8 +215,8 @@ class transfer_attack_L2(parent_attack):
 
                 print("Transfer attack number " + str(example_iter))
                 
-                #Iterate through the four different methods of generating adversaries (two different gradient 
-                # based attacks for each of the main architecture types); the minimally-perturbed attack will be returned
+                #Iterate through the four different starting points for generating adversaries (two different gradient 
+                # based attacks for each of the two main architecture types --> binding or not binding); the minimally-perturbed attack will be returned
                 for base_method_iter in range(4):
                 
                     adversary_distance = self.iterative_perturbation(fmodel, adversary_distance, example_iter, base_method_iter, unperturbed_image=self.input_data[example_iter], 
@@ -252,7 +251,7 @@ class transfer_attack_L2(parent_attack):
             print("Ground truth label is " + str(np.argmax(ground_truth_label)))
 
 
-            # Binary search for transfer attack as used in Schott et al
+            # Binary search for transfer attack as used in Schott et al; based on code provided by Jonas Rauber (Bethge Lab)
             direction = starting_adversary - unperturbed_image
             bad = 0
             good = None
@@ -345,18 +344,6 @@ class BIM_L2_attack(parent_attack):
 class DeepFool_L2_attack(parent_attack):
     attack_method = foolbox.attacks.DeepFoolL2Attack
     attack_type_dir = 'DeepFool_L2'
-
-class local_search_attack(parent_attack):
-    attack_method = foolbox.attacks.LocalSearchAttack
-    attack_type_dir = 'LocalSearch'
-
-class gaussian_blur_attack(parent_attack):
-    attack_method = foolbox.attacks.GaussianBlurAttack
-    attack_type_dir = 'GaussianBlur'
-
-class spatial_attack(parent_attack):
-    attack_method = foolbox.attacks.SpatialAttack
-    attack_type_dir = 'Spatial'
 
 class boundary_attack(parent_attack):
     #Overwrite parent constructor for two additional attributes : num_iterations and log_every_n_steps

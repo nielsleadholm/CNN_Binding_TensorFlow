@@ -28,7 +28,6 @@ def data_setup(params):
     training_data = training_data/255
     testing_data = testing_data/255
 
-    #Transform the labels into one-hot encoding
     training_labels = to_categorical(training_labels)
     testing_labels = to_categorical(testing_labels)
 
@@ -62,13 +61,14 @@ def initializer_fun(params, training_data, training_labels):
     tf.compat.v1.reset_default_graph() #Re-set the default graph to clear previous e.g. variable assignments
 
     dropout_rate_placeholder = tf.compat.v1.placeholder(tf.float32)
-    #He-initialization; note the paper 'Delving Deep into Rectifiers' used a value of 2.0
+    #He-initialization; note the paper 'Delving Deep into Rectifiers' used a value of 2.0; params['He_modifier'] is by default set to 1.0
     initializer = tf.contrib.layers.variance_scaling_initializer(factor=2.0*params['He_modifier'])
-    regularizer_l2 = tf.contrib.layers.l2_regularizer(scale=params['L2_regularization_scale'])
+    binding_regularizer_l2 = tf.contrib.layers.l2_regularizer(scale=params['L2_regularization_scale_binding'])
+    maxpool_regularizer_l2 = tf.contrib.layers.l2_regularizer(scale=params['L2_regularization_scale_maxpool'])
 
     y = tf.compat.v1.placeholder(training_labels.dtype, [None, 10], name='y-input')
 
-    if (params['dataset'] == 'cifar10'): #Define core variables for a VGG-like architecture for CIFAR-10
+    if (params['dataset'] == 'cifar10'): #Define variables for a VGG-like architecture for CIFAR-10
 
         x = tf.compat.v1.placeholder(training_data.dtype, [None, 32, 32, 3], name='x-input')
 
@@ -80,15 +80,15 @@ def initializer_fun(params, training_data, training_labels):
             'conv_W4' : tf.compat.v1.get_variable('CW4', shape=(3, 3, 64, 64), initializer=initializer),
             'conv_W5' : tf.compat.v1.get_variable('CW5', shape=(3, 3, 64, 128), initializer=initializer),
             'conv_W6' : tf.compat.v1.get_variable('CW6', shape=(3, 3, 128, 128), initializer=initializer),
-            'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(4*4*128, params['MLP_layer_1_dim']), initializer=initializer),
+            'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(4*4*128, params['MLP_layer_1_dim']), initializer=initializer, regularizer=maxpool_regularizer_l2),
             'dense_W2' : tf.compat.v1.get_variable('DW2', shape=(params['MLP_layer_1_dim'], params['MLP_layer_2_dim']), initializer=initializer),
             'output_W' : tf.compat.v1.get_variable('OW', shape=(params['MLP_layer_2_dim'], 10), initializer=initializer)
             }
-            if (params['architecture'] == 'BindingVGG') or (params['architecture'] == 'controlVGG'):
-                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(16*16*64, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
-                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(16*16*32, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
-                weights['course_bindingW2'] = tf.compat.v1.get_variable('courseW2', shape=(8*8*128, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
-                weights['finegrained_bindingW2'] = tf.compat.v1.get_variable('fineW2', shape=(8*8*64, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
+            if (params['architecture'] == 'BindingVGG'):
+                weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(16*16*64, params['MLP_layer_1_dim']), initializer=initializer, regularizer=binding_regularizer_l2)
+                weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(16*16*32, params['MLP_layer_1_dim']), initializer=initializer, regularizer=binding_regularizer_l2)
+                weights['course_bindingW2'] = tf.compat.v1.get_variable('courseW2', shape=(8*8*128, params['MLP_layer_1_dim']), initializer=initializer, regularizer=binding_regularizer_l2)
+                weights['finegrained_bindingW2'] = tf.compat.v1.get_variable('fineW2', shape=(8*8*64, params['MLP_layer_1_dim']), initializer=initializer, regularizer=binding_regularizer_l2)
 
             biases = {
             'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(32), initializer=initializer),
@@ -102,15 +102,12 @@ def initializer_fun(params, training_data, training_labels):
             'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
             }
 
-            decoder_weights = None
-
         var_list = [weights['conv_W1'], weights['conv_W2'], weights['conv_W3'], weights['conv_W4'], 
-        weights['conv_W5'], weights['conv_W6'], weights['dense_W1'], weights['dense_W2'], 
-        weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['conv_b3'], biases['conv_b4'], 
-        biases['conv_b5'], biases['conv_b6'], biases['dense_b1'], biases['dense_b2'], biases['output_b']]
+            weights['conv_W5'], weights['conv_W6'], weights['dense_W1'], weights['dense_W2'], 
+            weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['conv_b3'], biases['conv_b4'], 
+            biases['conv_b5'], biases['conv_b6'], biases['dense_b1'], biases['dense_b2'], biases['output_b']]
 
-
-        if (params['architecture'] == 'BindingVGG') or (params['architecture'] == 'controlVGG'):
+        if (params['architecture'] == 'BindingVGG'):
                 var_list.append(weights['course_bindingW1'])
                 var_list.append(weights['finegrained_bindingW1'])
                 var_list.append(weights['course_bindingW2'])
@@ -137,11 +134,9 @@ def initializer_fun(params, training_data, training_labels):
                 'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
                 }
 
-                decoder_weights = None
-
             var_list = [weights['conv_W1'], weights['conv_W2'], weights['dense_W1'], 
-            weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['dense_b1'], 
-            biases['output_b']]
+                weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['dense_b1'], 
+                biases['output_b']]
 
 
         else:
@@ -150,13 +145,14 @@ def initializer_fun(params, training_data, training_labels):
                 weights = {
                 'conv_W1' : tf.compat.v1.get_variable('CW1', shape=(5, 5, 1, 6), initializer=initializer),
                 'conv_W2' : tf.compat.v1.get_variable('CW2', shape=(5, 5, 6, 16), initializer=initializer),
-                'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(400, params['MLP_layer_1_dim']), initializer=initializer),
+                'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(400, params['MLP_layer_1_dim']), initializer=initializer, regularizer=maxpool_regularizer_l2),
                 'dense_W2' : tf.compat.v1.get_variable('DW2', shape=(params['MLP_layer_1_dim'], params['MLP_layer_2_dim']), initializer=initializer),
                 'output_W' : tf.compat.v1.get_variable('OW', shape=(params['MLP_layer_2_dim'], 10), initializer=initializer)
                 }
-                if (params['architecture'] == 'BindingCNN') or (params['architecture'] == 'controlCNN'):
-                    weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(1600, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
-                    weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(1176, params['MLP_layer_1_dim']), initializer=initializer, regularizer=regularizer_l2)
+
+                if (params['architecture'] == 'BindingCNN'):
+                    weights['course_bindingW1'] = tf.compat.v1.get_variable('courseW1', shape=(1600, params['MLP_layer_1_dim']), initializer=initializer, regularizer=binding_regularizer_l2)
+                    weights['finegrained_bindingW1'] = tf.compat.v1.get_variable('fineW1', shape=(1176, params['MLP_layer_1_dim']), initializer=initializer, regularizer=binding_regularizer_l2)
 
                 biases = {
                 'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(6), initializer=initializer),
@@ -166,18 +162,11 @@ def initializer_fun(params, training_data, training_labels):
                 'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
                 }
 
-                decoder_weights = {
-                    'de_conv_W1' : tf.get_variable('de_CW1', shape=(5, 5, 6, 1), initializer=initializer),
-                    'de_conv_W2' : tf.get_variable('de_CW2', shape=(5, 5, 16, 6), initializer=initializer),
-                    'de_dense_W1' : tf.get_variable('de_DW1', shape=(params['MLP_layer_1_dim'], 400), initializer=initializer),
-                    'de_dense_W2' : tf.get_variable('de_DW2', shape=(params['MLP_layer_2_dim'], params['MLP_layer_1_dim']), initializer=initializer),
-                    }
-
             var_list = [weights['conv_W1'], weights['conv_W2'], weights['dense_W1'], weights['dense_W2'], 
-            weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['dense_b1'], 
-            biases['dense_b2'], biases['output_b']]
+                weights['output_W'], biases['conv_b1'], biases['conv_b2'], biases['dense_b1'], 
+                biases['dense_b2'], biases['output_b']]
 
-            if (params['architecture'] == 'BindingCNN') or (params['architecture'] == 'controlCNN'):
+            if (params['architecture'] == 'BindingCNN'):
                 var_list.append(weights['course_bindingW1'])
                 var_list.append(weights['finegrained_bindingW1'])
 
@@ -189,7 +178,7 @@ def initializer_fun(params, training_data, training_labels):
     for biases_key, biases_var in biases.items():
         var_summaries(biases_var, biases_key)
 
-    return x, y, dropout_rate_placeholder, var_list, weights, biases, decoder_weights
+    return x, y, dropout_rate_placeholder, var_list, weights, biases
 
 
 def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_dic):
@@ -216,7 +205,7 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynam
 
     return logits, scalar_dic
 
-#Larger model for MNIST with the same basic architecture as used in Madry et, 2017
+#Larger model for MNIST with a similar basic architecture to that used in Madry et, 2017
 def MadryCNN_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
     print("Building a CNN architecture as used in Madry et al, 2017")
@@ -232,7 +221,7 @@ def MadryCNN_predictions(features, dropout_rate_placeholder, weights, biases, dy
     pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 32])
     dense1 = tf.nn.bias_add(tf.matmul(pool2_flat, weights['dense_W1']), biases['dense_b1'])
 
-    #Note Madry architecture only has one fully connected layer
+    #Note Madry-like architecture only has one fully connected layer
     dense1_drop = tf.nn.dropout(dense1, rate=dropout_rate_placeholder)
     dense1_drop = tf.nn.relu(dense1_drop)
     logits = tf.nn.bias_add(tf.matmul(dense1_drop, weights['output_W']), biases['output_b'])
@@ -381,28 +370,26 @@ def unpooling_sequence(pool_drop, pool_indices, relu, relu_flat_shape, dropout_r
 
 def gradient_unpooling_sequence(high_level, low_level, low_flat_shape, dropout_rate_placeholder, scalar_dic, dynamic_dic):
 
-    #Extract binding information for low-level neurons that are driving critical (i.e. max-pooled) mid-level neurons
+    #Extract binding information for low-level neurons that are driving important (i.e. max-pooled) mid-level neurons
     binding_grad = tf.squeeze(tf.gradients(high_level, low_level, unconnected_gradients=tf.UnconnectedGradients.ZERO), 0) #Squeeze removes the dimension of the gradient tensor that stores dtype
     binding_grad_flat = tf.reshape(binding_grad, low_flat_shape)
 
-    #Rather than using the k-largest gradietns to apply a mask, use the k-smallest gradients; serves as a control for the gradient operation somehow being the trick
+    #Rather than using the k-largest gradients to apply a mask, use the k-smallest gradients; serves as a control for the gradient operation alone being beneficial
     if dynamic_dic['dynamic_var'] == 'kloser_gradients':
         print("Using the k-*smallest* gradients for 'gradient unpooling'.")
         #Note we use the negative sign to find the 'bottom-k'
         values, _ = tf.math.top_k(tf.negative(binding_grad_flat), k=round(low_flat_shape[1]*dynamic_dic['sparsification_kwinner']))
         kth = tf.reduce_max(tf.negative(values), axis=1)
         mask = tf.less_equal(binding_grad_flat, tf.expand_dims(kth, -1))
-        low_level_flat = tf.reshape(low_level, low_flat_shape) 
-        gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise
 
     else:
         #Use k-th largest value as a threshold for getting a boolean mask
-        #K is typicall selected for approx top 10-15% gradients
         values, _ = tf.math.top_k(binding_grad_flat, k=round(low_flat_shape[1]*dynamic_dic['sparsification_kwinner']))
         kth = tf.reduce_min(values, axis=1)
         mask = tf.greater_equal(binding_grad_flat, tf.expand_dims(kth, -1))
-        low_level_flat = tf.reshape(low_level, low_flat_shape) 
-        gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise
+
+    low_level_flat = tf.reshape(low_level, low_flat_shape) 
+    gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise
 
     scalar_dic['gradient_unpool_sparsity'] = tf.math.zero_fraction(gradient_unpool_binding_activations)
 
@@ -457,10 +444,10 @@ def VGG_conv_sequence(inputs, dropout_rate_placeholder, conv_weights, conv_biase
 
     return pool_drop, pool_indices, reluB, reluA, scalar_dic
 
-#Define max_unpool function, used in the binding CNN - note credit below for this code
+#Define max_unpool function, used in the binding CNN
 def max_unpool(pool, ind, prev_tensor, scope='unpool_2d'):
     """
-    Code credit of 'Twice22' from thread https://github.com/tensorflow/tensorflow/issues/2169
+    Code the creation of 'Twice22' from https://github.com/tensorflow/tensorflow/issues/2169
     
     Implement the unpooling operation, as explained here:
     https://stackoverflow.com/questions/36548736/tensorflow-unpooling
@@ -520,7 +507,7 @@ def max_unpool(pool, ind, prev_tensor, scope='unpool_2d'):
 
 #Primary training function
 def network_train(params, iter_num, var_list, training_data, training_labels, testing_data, testing_labels, 
-    weights, biases, decoder_weights, x_placeholder, y_placeholder, dropout_rate_placeholder):
+    weights, biases, x_placeholder, y_placeholder, dropout_rate_placeholder):
 
     if params['architecture'] == 'LeNet':
         predictions, scalar_dic = LeNet_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
@@ -540,7 +527,7 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
     total_accuracy = tf.reduce_sum(tf.cast(correct_prediction, tf.float32)) #Used to store batched accuracy for evaluating on the entire test dataset
 
-    #Create the chosen optimizer with tf.train.Adam..., then add it to the graph with .minimize
+    #Create the chosen optimizer with tf.train.Adam, then add it to the graph with .minimize
     optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=params['learning_rate']).minimize(cost)
 
     #Create a Saver object to enable later re-loading of the learned weights
@@ -556,8 +543,6 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
     with tf.compat.v1.Session() as sess:
 
-        #Initialize variables; note the requirement for explicit initialization prevents expensive
-        #initializers from being re-run when e.g. reloading a model from a checkpoint
         sess.run(tf.compat.v1.global_variables_initializer())
 
         network_name_str = str(iter_num) + params['architecture']
@@ -574,11 +559,14 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
                     batches += 1
 
                     if params['Gaussian_noise'] != None:
+                        print("Adding Gaussian noise to the training data")
                         batch_x = np.clip(batch_x + np.random.normal(0, scale=params['Gaussian_noise'], size=np.shape(batch_x)), 0, 1)
+                    
                     if batches >= len(training_labels)/params['batch_size']:
                         break
 
                     loss, training_acc = train_batch(batch_x, batch_y, params['dropout_rate'])
+            
             else:
                 #Shuffle the training data
                 rand_idx = np.random.permutation(len(training_labels))
@@ -608,13 +596,11 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 
                 #Add the TensorBoard summary data of the network (weight histograms etc.), derived from the last batch run
                 training_writer.add_summary(network_summary, epoch)
-
                 training_acc = training_accuracy_total/len(training_labels)
                 #Convert python variable into a Summary object for TensorFlow
                 training_summary = tf.Summary(value=[tf.Summary.Value(tag="training_acc", simple_value=training_acc),])              
                 training_writer.add_summary(training_summary, epoch)
 
-            
             #Find the accuracy on the test dataset using batches to avoid issues of memory capacity
             testing_accuracy_total = 0
             for test_batch in range(math.ceil(len(testing_labels)/params['batch_size'])):
@@ -656,21 +642,28 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
 if __name__ == '__main__':
 
     params = {'architecture':'BindingCNN',
-    'dynamic_dic':{'dynamic_var':'None', 'sparsification_kwinner':0.15},
+    'dynamic_dic':{'dynamic_var':'None', 'sparsification_kwinner':0.4},
     'dataset':'mnist',
     'training_epochs':3,
     'crossval_bool':False,
     'dropout_rate':0.25,
     'label_smoothing':0.1,
     'learning_rate':0.001,
+    'Gaussian_noise':None,
+    'salt&pepper_noise':None,
+    'He_modifier':1.0,
+    'MLP_layer_1_dim':120,
+    'MLP_layer_2_dim':84,
+    'L2_regularization_scale_maxpool':0.0,
+    'L2_regularization_scale_binding':0.0,
     'batch_size':128} #NB that drop-out 'rate' = 1 - 'keep probability'
 
     (training_data, training_labels, testing_data, testing_labels, _, _) = data_setup(params)
 
-    x, y, dropout_rate_placeholder, var_list, weights, biases, decoder_weights = initializer_fun(params, training_data, training_labels)
+    x, y, dropout_rate_placeholder, var_list, weights, biases = initializer_fun(params, training_data, training_labels)
     iter_num = 0
 
-    network_train(params, iter_num, var_list, training_data, training_labels, testing_data, testing_labels, weights, biases, decoder_weights,
+    network_train(params, iter_num, var_list, training_data, training_labels, testing_data, testing_labels, weights, biases,
      x_placeholder=x, y_placeholder=y, dropout_rate_placeholder=dropout_rate_placeholder)
 
 
