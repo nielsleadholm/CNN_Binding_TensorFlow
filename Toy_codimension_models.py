@@ -49,7 +49,6 @@ def randomize_order(x, y):
 
     return x,y
 
-
 def generate_toy_data(data_size, data_set, additional_features_dimension, training_data_bool, noise=None):
 
     if data_set == 'linear':
@@ -92,14 +91,13 @@ def generate_toy_data(data_size, data_set, additional_features_dimension, traini
         x_data, one_hot_labels = twospirals(data_size, noise=noise)
 
 
-    elif data_set == 'hyper_spheres':
-        #Hyper_spheres has two dimensions that are perfectly linearly separable, as well as
-        # additional_features_dimension number of dimensions that are not perfectly seperable, but carry some
-        # class information; finally, dimension_augmentation will later be used to also add additional_features_dimension
-        # dimensions that are *not* informative
+    elif data_set == 'multiD_Gaussians':
+        #Hyper_spheres has two dimensions that are easily linearly separable, as well as
+        # additional_features_dimension number of dimensions that are not as easily seperable, but carry some
+        # class information
 
         #Note there are two sources of noise: the fixed level of noise which determines the ground truth
-        # manifolds (thus the manifolds are more-gaussians than true spheres), 
+        # distributions (thus the manifolds are more-gaussians than true spheres), 
         # and the user-specified level of noise that is added to this
 
         manifold_noise = 0.15
@@ -108,21 +106,14 @@ def generate_toy_data(data_size, data_set, additional_features_dimension, traini
         base_features_zero_class = np.random.normal(0, scale=manifold_noise, size=(int(data_size/2),2)) #The base two features
         base_features_one_class = np.random.normal(1, scale=manifold_noise, size=(int(data_size/2),2))
 
-        #print(base_features_zero_class.shape)
-
         #Note the change in means and the use of additional_features_dimension
         imperfect_features_zero_class = np.random.normal(0, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
         imperfect_features_one_class = np.random.normal(0.65, scale=manifold_noise, size=(int(data_size/2),additional_features_dimension))
 
-        #print(imperfect_features_zero_class.shape)
-
         zero_class_data = np.concatenate((base_features_zero_class, imperfect_features_zero_class), axis=1)
-        #print(zero_class_data.shape)
-
         one_class_data = np.concatenate((base_features_one_class, imperfect_features_one_class), axis=1)
 
         x_data = np.concatenate((zero_class_data, one_class_data), axis=0)
-        #print(x_data.shape)
 
         one_hot_labels = np.concatenate(
             (np.concatenate((np.ones(shape=(int(data_size/2),1)), np.zeros(shape=(int(data_size/2),1))), axis=1),
@@ -179,7 +170,6 @@ def toy_initializer(network_iter, model_params):
 def shallow_MLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
     layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
-    #layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
 
     logits = tf.nn.bias_add(tf.matmul(layer_1, weights['w3']), biases['b3'])
 
@@ -198,48 +188,6 @@ def deep_MLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dyn
     dummy = {}
 
     return logits, {}, {}, 0.0, 0.0
-
-def shallow_BindingMLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
-
-    layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
-    layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
-
-    binding_layer = gradient_unpooling_sequence(layer_2, layer_1, low_flat_shape=[-1,dynamic_dic['binding_width']], k_sparsity=dynamic_dic['k_sparsity'])
-
-    logits = tf.nn.bias_add(tf.add(tf.matmul(layer_2, weights['w3']), 
-        tf.matmul(binding_layer, weights['w1_binding'])), biases['b3'])
-
-    return logits, {}, {}, 0.0, 0.0
-
-def deep_BindingMLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
-
-    layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
-    layer_2 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_1, weights['w2']), biases['b2']))
-    layer_3 = tf.nn.relu(tf.nn.bias_add(tf.matmul(layer_2, weights['w2b']), biases['b2b']))
-
-    binding_layer = gradient_unpooling_sequence(layer_3, layer_2, low_flat_shape=[-1,dynamic_dic['binding_width']], k_sparsity=dynamic_dic['k_sparsity'])
-
-    logits = tf.nn.bias_add(tf.add(tf.matmul(layer_3, weights['w3']), 
-        tf.matmul(binding_layer, weights['w1_binding'])), biases['b3'])
-
-    dummy = {}
-
-    return logits, {}, {}, 0.0, 0.0
-
-def gradient_unpooling_sequence(high_level, low_level, low_flat_shape, k_sparsity):
-
-    #Extract binding information for low-level neurons that are driving critical (i.e. max-pooled) mid-level neurons
-    binding_grad = tf.squeeze(tf.gradients(high_level, low_level, unconnected_gradients=tf.UnconnectedGradients.ZERO), 0) #Squeeze removes the dimension of the gradient tensor that stores dtype
-    binding_grad_flat = tf.reshape(binding_grad, low_flat_shape)
-
-    #Use k-th largest value as a threshold for getting a boolean mask
-    values, _ = tf.math.top_k(binding_grad_flat, k=round(low_flat_shape[1]*k_sparsity))
-    kth = tf.reduce_min(values, axis=1)
-    mask = tf.greater_equal(binding_grad_flat, tf.expand_dims(kth, -1))
-    low_level_flat = tf.reshape(low_level, low_flat_shape) 
-    gradient_unpool_binding_activations = tf.multiply(low_level_flat, tf.dtypes.cast(mask, dtype=tf.float32)) #Apply the Boolean mask element-wise
-
-    return gradient_unpool_binding_activations
 
 def train_toy(pred_function, x_placeholder, y_placeholder, dropout_rate_placeholder, training_data, training_labels, 
         testing_data, testing_labels, mesh, weights, biases, var_list, model_params, network_iter):
@@ -449,7 +397,6 @@ def dimension_augment(dim, x_data):
 
     return x_data
 
-
 def generate_toy_visual(model_params, adversarial_params, network_iter, attack_for_visual, all_results_df):
 
     iter_dic = {} #Store results 
@@ -594,9 +541,6 @@ if __name__ == '__main__':
 
         model_params['additional_features_dimension']=codim_iter
         model_params['additional_zero_dimensions']=total_dim-codim_iter
-
-        # print("Features:" + str(model_params['additional_features_dimension']))
-        # print("Zeros:" + str(model_params['additional_zero_dimensions']))
 
         for network_iter in range(model_params['num_networks']):
 
