@@ -68,6 +68,8 @@ def toy_initializer(network_iter, model_params):
 
     x_placeholder = tf.compat.v1.placeholder(tf.float32, [None, input_dim])
     y_placeholder = tf.compat.v1.placeholder(tf.int32, [None, 2])
+    dropout_rate_placeholder = tf.compat.v1.placeholder(tf.float32) #note no dropout is used but it is an expected argument
+        # in some of the functions used
 
     initializer = tf.contrib.layers.variance_scaling_initializer()
 
@@ -84,9 +86,9 @@ def toy_initializer(network_iter, model_params):
 
     var_list = [weights['w1'], weights['w2'], biases['b1'], biases['b2']]
 
-    return x_placeholder, y_placeholder, weights, biases, var_list
+    return x_placeholder, y_placeholder, dropout_rate_placeholder, weights, biases, var_list
 
-def MLP_predictions(x_input, weights, biases):
+def MLP_predictions(x_input, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
     layer_1 = tf.nn.relu(tf.nn.bias_add(tf.matmul(tf.dtypes.cast(x_input, dtype=tf.float32), weights['w1']), biases['b1']))
 
@@ -96,10 +98,10 @@ def MLP_predictions(x_input, weights, biases):
 
     return logits, scalar_dic
 
-def train_toy(pred_function, x_placeholder, y_placeholder, training_data, training_labels, 
+def train_toy(pred_function, x_placeholder, y_placeholder, dropout_rate_placeholder, training_data, training_labels, 
         testing_data, testing_labels, mesh, weights, biases, var_list, model_params, network_iter):
     
-    predictions, _ = pred_function(x_placeholder, weights, biases)
+    predictions, _ = pred_function(x_placeholder, dropout_rate_placeholder, weights, biases, dynamic_dic=[])
 
     cost = tf.reduce_mean(tf.compat.v1.losses.sigmoid_cross_entropy(logits=predictions, 
         multi_class_labels=y_placeholder))
@@ -127,16 +129,11 @@ def train_toy(pred_function, x_placeholder, y_placeholder, training_data, traini
 
         save_path = saver.save(sess, "network_weights_data/" + str(network_iter) + "_MLP.ckpt")
 
-        # Get predictions for each point in the mesh, for test data, and for all data
+        # Get predictions for each point in the mesh; this will enable later visualization of the decision boundary
         mesh_pred = sess.run(predictions, feed_dict = {x_placeholder: mesh})
-        test_pred = sess.run(predictions, feed_dict = {x_placeholder: testing_data})
-        data_pred = sess.run(predictions, feed_dict = {x_placeholder: np.concatenate((training_data, testing_data), axis=0)})
-
         mesh_pred = np.argmax(mesh_pred, axis=1)
-        test_pred = np.argmax(test_pred, axis=1)
-        data_pred = np.argmax(data_pred, axis=1)
 
-        return training_acc, testing_acc, mesh_pred, test_pred, data_pred
+        return training_acc, testing_acc, mesh_pred
 
 #From Gaurav-Kaushik (https://github.com/gaurav-kaushik/Data-Visualizations-Medium)
 def create_mesh(matrix_2D, bound=.1, step=.02):
@@ -165,15 +162,11 @@ def create_mesh(matrix_2D, bound=.1, step=.02):
     return mesh
 
 #Adapted from Gaurav-Kaushik (https://github.com/gaurav-kaushik/Data-Visualizations-Medium)
-def plot_decision_boundaries(X_2D, targets, labels, X_test_, 
-                            mesh_pred, test_pred, data_pred, X_adver_, adver_pred,
-                             colormap_, colormap_adver_, labelmap_, network_iter, boundary_iter,
+def plot_decision_boundaries(X_2D, mesh_pred, colormap_,
+                            labelmap_, network_iter,
                             step_=0.02, title_="", xlabel_="", ylabel_=""):
     """
     X_2D:        2D numpy array of all data (training and testing)
-    targets:     array of target data (e.g 0's and 1's)
-    labels:      array of labels for target data (e.g. 'positive' and 'negative')
-    X_test_:     test data taken (e.g. from test_train_split())
     colormap_:   map of target:color (e.g. {'0': 'red', ...} )
     labelmap_:   map of target:label (e.g. {'0': 'setosa', ...} )
     step_:       step size for mesh (e.g lower = higher resolution)
@@ -186,56 +179,13 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
     mesh_ = create_mesh(X_2D, step=step_)
 
     # create color vectors [assume targets are last index]
-    colors = [colormap_[str(t)] for t in targets]
-    colors_test_pred = [colormap_[str(p)] for p in test_pred]
-    colors_adver_pred = [colormap_adver_[str(p)] for p in adver_pred]
-    colors_pred_data = [labelmap_[str(x)] for x in data_pred]
     colors_mesh = [colormap_[str(int(m))] for m in mesh_pred.ravel()]
 
 
     """ Create ColumnDataSources  """
-    source_data = ColumnDataSource(data=dict(X=X_2D[:,0], 
-                                             Y=X_2D[:,1],
-                                             colors=colors, 
-                                             colors_legend=labels,
-                                             colors_pred_data=colors_pred_data))
-
-
-    source_test = ColumnDataSource(data=dict(X_test=X_test_[:,0],
-                                                    Y_test=X_test_[:,1],
-                                                    colors_test_pred=colors_test_pred))
-
-    source_adver = ColumnDataSource(data=dict(X_adver=X_adver_[:,0],
-                                                    Y_adver=X_adver_[:,1],
-                                                    colors_adver_pred=colors_adver_pred))
-
     source_mesh = ColumnDataSource(data=dict(mesh_x=mesh_[0].ravel(),
                                              mesh_y=mesh_[1].ravel(),
                                              colors_mesh=colors_mesh))    
-
-    print("Half-value")
-    half=int(len(X_test_)/2)
-    print(half)
-    
-    if boundary_iter == 0:
-        segment_color='navy'
-        source_adver_shift = ColumnDataSource(data=dict(
-            x=X_adver_[:,0],
-            y=X_adver_[:,1],
-            xm01=X_test_[:half,0],
-            ym01=X_test_[:half,1]
-        )
-    )
-    else:
-        segment_color='pink'
-        source_adver_shift = ColumnDataSource(data=dict(
-            x=X_adver_[:,0],
-            y=X_adver_[:,1],
-            xm01=X_test_[half:,0],
-            ym01=X_test_[half:,1]
-        )
-    )
-
 
     # Initiate Plot
     tools_ = ['crosshair', 'zoom_in', 'zoom_out', 'save', 'reset', 'tap', 'box_zoom']
@@ -243,45 +193,16 @@ def plot_decision_boundaries(X_2D, targets, labels, X_test_,
     p.xaxis.axis_label = xlabel_
     p.yaxis.axis_label = ylabel_
 
-    # plot all data
-    # p_data = p.circle('X', 'Y', fill_color='colors',
-    #               size=10, alpha=0.5, line_alpha=0, 
-    #               source=source_data, name='Data')
-    
-    # plot thick outline around predictions on test data
-    p_test = p.circle('X_test', 'Y_test', line_color='colors_test_pred',
-                  size=8, alpha=0.75, line_width=3, fill_alpha=0,
-                  source=source_test, legend_label='Test Data')
-
-    # plot mesh
+    # Plot mesh
     p_mesh = p.square('mesh_x', 'mesh_y', fill_color='colors_mesh',
                size = 13, line_alpha=0, fill_alpha=0.05, 
                source=source_mesh)
     
-
-    #plot predictions on adversarial data
-    p_data = p.circle('X_adver', 'Y_adver', fill_color='colors_adver_pred',
-                  size=12, alpha=0.75, line_alpha=0, 
-                  source=source_adver, legend_label='Adversarial Images')
-
-
-    adver_shift = Segment(x0="x", y0="y", x1="xm01", y1="ym01", line_color=segment_color, line_width=3)
-    p.add_glyph(source_adver_shift, adver_shift)
-
-
-    # add hovertool
-    # hover_1 = HoverTool(names=['Data'], 
-    #                     tooltips=[("truth", "@colors_legend"), ("prediction", "@colors_pred_data")], 
-    #                     renderers=[p_data])
-    # p.add_tools(hover_1)
-
-    #show(p)
-    save(obj=p, filename='./Boundary_visual_' + str(network_iter) + 'boundary_' + str(boundary_iter) + '.html', title="Decision_boundary")
+    save(obj=p, filename='./Boundary_visual_' + str(network_iter) + '.html', title="Decision_boundary")
 
     return
 
 def normalize(training_data, testing_data):
-    #Normalize data
     data_min = np.minimum(np.amin(training_data, axis=0), np.amin(testing_data, axis=0))
     data_max = np.maximum(np.amax(training_data, axis=0), np.amax(testing_data, axis=0))
 
@@ -291,14 +212,19 @@ def normalize(training_data, testing_data):
     return training_data, testing_data
 
 #Add additional (uninformative) feature dimensions
-def dimension_augment(dim, x_data):
+def dimension_augment(dim, x_data, reverse_bool=False):
 
-    x_data = np.concatenate((x_data, np.zeros((np.shape(x_data)[0], 
-        dim))), axis=1)
+    if reverse_bool == False:
+        x_data = np.concatenate((x_data, np.zeros((np.shape(x_data)[0], 
+            dim))), axis=1)
+    else:
+        x_data = np.concatenate((np.zeros((np.shape(x_data)[0], 
+            dim)), x_data), axis=1)
+
 
     return x_data
 
-def generate_toy_visual(model_params, adversarial_params, network_iter, attack_for_visual, all_results_df):
+def generate_toy_visual(model_params, adversarial_params, network_iter, all_results_df):
 
     iter_dic = {} #Store results 
 
@@ -310,12 +236,49 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
 
     training_data, testing_data = normalize(training_data, testing_data)
 
-    x_placeholder, y_placeholder, weights, biases, var_list = toy_initializer(network_iter, model_params)
+    x_placeholder, y_placeholder, dropout_rate_placeholder, weights, biases, var_list = toy_initializer(network_iter, model_params)
 
 
-    #Note mesh data for plotting (rather than predictions) is *not* expanded beyond the two non-zero dimensions of the input, in order to enable visualization
+    #mesh_pred will determine how the mesh-data-squares are labeled, so which dimension one chooses to pass to the
+    # plot mesh function (e.g. one of the two core dimensions, or one of the additional ones) is up to the user
+    #It is only mesh_all_data that determines which dimensions are actually plotted
+
+    #**Note mesh data for plotting (rather than predictions) is *not* expanded beyond the two non-zero dimensions of the input, in order to enable visualization
+    
+
+
+    #create_mesh essentially just takes the range of values of the input distribution, and using the step size
+    # creates a mesh of appropriate range and grade/number of partitions 
+
+    #the returned mesh_, therefore doesn't really encode any information about what the 'origin' dimension was
+    #At this point it's a e.g. 2 x 121 x 121 array
+
+    #I then expand the dimensionality of mesh_ to also have the zero and non-zero feature dimensions; this is done alongside
+    # flattening the samples from the mesh, so that it becomes a e.g. 121*121= 14641 x 22 x 22 array
+
+    #I then pass this long array of 'inputs' so that after training, the network's predictions for all of these data-points are evaluated
+    #The returned labels are therefore e.g. a 14641 x 1 array
+
+    #It's the fact that the 14641 inputs don't correspond to a random arrangement, but actually the 'movement' along
+    # the mesh grid that essentially encodes the information which I'm subsequently seeing in the decision boundary
+
+    #If I was to create the first two dimensions of the mesh grid as e.g. two extra zero-features ones,
+    # then I believe I would get the decision boundary I want - because think about it, as you move along 
+    # these dimensions, the network prediction might e.g. always be 1
+
+
+
+
+    # the key is that I'm defining the mesh steps to be related to the first two dimensions, which based on my network 
+    #and what it's been trained on, are the two main informative dimensions; this is all specified by how I join the 
+    # mesh_ vector (which could really correspond to *any* of the two features) with the other features; if for example
+    # I was to concatenate it *after* the zero dimensions, then it would be the first two zero dimensions that would be used
+
+
+
+
+
     mesh_all_data = np.concatenate((training_data, testing_data), axis=0)
-    mesh_all_labels = (np.concatenate((training_labels, testing_labels), axis=0)[:, 1]).astype(int)
 
     mesh_ = create_mesh(mesh_all_data, step=model_params['step'])
 
@@ -328,14 +291,17 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
     testing_data = dimension_augment(model_params['additional_zero_dimensions'], testing_data)
 
     print("Mesh shape is " + str(np.shape(mesh_)))
-    mesh_ = dimension_augment(model_params['additional_zero_dimensions'], np.c_[mesh_[0].ravel(), mesh_[1].ravel()])
+    mesh_ = dimension_augment(model_params['additional_zero_dimensions'], np.c_[mesh_[0].ravel(), mesh_[1].ravel()], reverse_bool=False)
     print("Mesh shape is " + str(np.shape(mesh_)))
 
     # *** NEED TO REFACTOR ***
     
     #Perform a second dimension augmentation to account for the semi-informative features that are 
     # not included when the actual mesh is created
-    mesh_ = dimension_augment(model_params['additional_features_dimension'], mesh_)
+
+    #** bear in mind above that the zero dimensions are added last on the training/test data
+
+    mesh_ = dimension_augment(model_params['additional_features_dimension'], mesh_, reverse_bool=True)
     print("Mesh shape is " + str(np.shape(mesh_)))
 
     print(training_data.shape)
@@ -345,75 +311,35 @@ def generate_toy_visual(model_params, adversarial_params, network_iter, attack_f
     functions.update(locals())
     pred_function = functions.get('MLP_predictions')
 
-    training_acc, testing_acc, mesh_pred, test_pred, data_pred = train_toy(pred_function, x_placeholder, y_placeholder, 
-        training_data, training_labels, testing_data, testing_labels, mesh_,
-     weights, biases, var_list, model_params, network_iter)
+    training_acc, testing_acc, mesh_pred = train_toy(pred_function, x_placeholder, y_placeholder, dropout_rate_placeholder,
+        training_data, training_labels, testing_data, testing_labels, mesh_, weights, biases, var_list, model_params, network_iter)
 
+    print("mesh_pred shape is " + str(np.shape(mesh_pred)))
 
-    iter_dic.update({'co_dim': model_params['additional_zero_dimensions'], 'training_accuracy':float(training_acc), 'testing_accuracy':float(testing_acc)})
+    # iter_dic.update({'co_dim': model_params['additional_zero_dimensions'], 'training_accuracy':float(training_acc), 'testing_accuracy':float(testing_acc)})
 
-    update_dic = carry_out_attacks(model_params=model_params, adversarial_params=adversarial_params, 
-        pred_function=pred_function, input_data=testing_data, input_labels=testing_labels, 
-        x_placeholder=x_placeholder, var_list=var_list, weights=weights, biases=biases, 
-        network_name_str=str(network_iter) + "_MLP", 
-        iter_num=network_iter)
+    # update_dic = carry_out_attacks(model_params=model_params, adversarial_params=adversarial_params, 
+    #     pred_function=pred_function, input_data=testing_data, input_labels=testing_labels, 
+    #     x_placeholder=x_placeholder, var_list=var_list, weights=weights, biases=biases, 
+    #     network_name_str=str(network_iter) + "_MLP", 
+    #     iter_num=network_iter, dynamic_dic={})
 
+    # iter_dic.update(update_dic)
 
-    iter_dic.update(update_dic)
-
-    print("\n\nThe cumulative results are...\n")
-    print(iter_dic)
-    iter_df = pd.DataFrame(data=iter_dic, index=[network_iter], dtype=np.float32)
-    all_results_df = all_results_df.append(iter_df)
-    print(all_results_df)
-    all_results_df.to_pickle('Results.pkl')
-    all_results_df.to_csv('Results.csv')
-
+    # print("\n\nThe cumulative results are...\n")
+    # print(iter_dic)
+    # iter_df = pd.DataFrame(data=iter_dic, index=[network_iter], dtype=np.float32)
+    # all_results_df = all_results_df.append(iter_df)
+    # all_results_df.to_pickle('Results.pkl')
+    # all_results_df.to_csv('Results.csv')
 
     toy_colormap = {'0': 'red', '1': 'dodgerblue'} 
     toy_labelmap = {'0': 'negative', '1': 'positive'} 
-    toy_labels = [toy_labelmap[str(x)] for x in mesh_all_labels]
+    
 
-    # adver_colormap = {'0': 'pink', '1': 'navy'} 
-
-    # #Note that Carry_out_attacks will return a None (under class/prediction) and array of zeros where the attack
-    # #was unsucessful; this is key to how tfCore_adversarial e.g. calculates distances, so rather than change this
-    # #we use the locations of where an attack was unsuccessful to retrieve the original (true) label and the associated input features-data
-    # #Note therefore that due to the label these will be clearly distinguishable from unaltered data that was misclassified
-
-    # failed_adver_indices = np.nonzero(adver_pred_dic[attack_for_visual] == None)
-
-    # print(np.shape(adver_pred_dic[attack_for_visual]))
-    # print(adver_pred_dic[attack_for_visual])
-    # print(np.shape(testing_labels))
-    # print(failed_adver_indices)
-
-    # adver_pred_dic[attack_for_visual][failed_adver_indices] = ((testing_labels[:,1]==1)[failed_adver_indices]).astype(int)
-    # adver_data_dic[attack_for_visual][failed_adver_indices, :] = testing_data[failed_adver_indices, :]
-    # adver_pred = adver_pred_dic[attack_for_visual]
-    # adver_data = adver_data_dic[attack_for_visual]
-
-    # half = int(adversarial_params['num_attack_examples']/2)
-
-    # print(np.shape(test_pred))
-    # print(np.shape(adver_pred))
-
-    # print("\n *** adversarial predictions ***")
-    # print(test_pred[0:20])
-    # print(adver_pred[0:20])
-
-    # #Plot test samples on decision boundary
-    # plot_decision_boundaries(X_2D=mesh_all_data, targets=mesh_all_labels, labels=toy_labels, X_test_=testing_data, 
-    #                         mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data[0:half], 
-    #                         adver_pred=adver_pred[0:half],
-    #                          step_=model_params['step'], colormap_=toy_colormap, colormap_adver_=adver_colormap,
-    #                           labelmap_=toy_labelmap, network_iter=network_iter, boundary_iter=0)
-
-    # plot_decision_boundaries(X_2D=mesh_all_data, targets=mesh_all_labels, labels=toy_labels, X_test_=testing_data, 
-    #                         mesh_pred=mesh_pred, test_pred=test_pred, data_pred=data_pred, X_adver_=adver_data[half:], 
-    #                         adver_pred=adver_pred[half:],
-    #                          step_=model_params['step'], colormap_=toy_colormap, colormap_adver_=adver_colormap,
-    #                           labelmap_=toy_labelmap, network_iter=network_iter, boundary_iter=1)
+    #Plot decision boundary
+    plot_decision_boundaries(X_2D=mesh_all_data, mesh_pred=mesh_pred, step_=model_params['step'], colormap_=toy_colormap, 
+                            labelmap_=toy_labelmap, network_iter=network_iter)
 
     return all_results_df
 
@@ -422,7 +348,6 @@ if __name__ == '__main__':
     with open('config_toy.yaml') as f:
         params = yaml.load(f, Loader=yaml.FullLoader)
 
-    attack_for_visual = 'boundary'
     model_params = params['model_params']
 
     adversarial_params = params['adversarial_params']
@@ -436,9 +361,11 @@ if __name__ == '__main__':
 
     for codim_iter in range(total_dim+1):
 
-        model_params['additional_features_dimension']=codim_iter
-        model_params['additional_zero_dimensions']=total_dim-codim_iter
+
+        #temporarily disable to test plotting function***
+        # model_params['additional_features_dimension']=codim_iter
+        # model_params['additional_zero_dimensions']=total_dim-codim_iter
 
         for network_iter in range(model_params['num_networks']):
 
-            all_results_df = generate_toy_visual(model_params, adversarial_params, network_iter, attack_for_visual, all_results_df)
+            all_results_df = generate_toy_visual(model_params, adversarial_params, network_iter, all_results_df)
