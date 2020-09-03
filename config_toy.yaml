@@ -1,30 +1,16 @@
 --- 
-  #k_sparsity determines what percentage of the k-largest gradients have a 1 rather than a 0 in their
-  # associated boolean mask; i.e. 1.0 corresponds to using all binding information, whereas e.g. 0.25
-  # corresponds to just up-projecting the activations associated with the highest 25% of gradients
-  # 0.0 would correspond to no binding (i.e. the activations of the binding neurons are always 0)
-  # 1.0 corresponds to the 'control binding' NN (i.e. all information is up-projected)
  model_params:
-  architecture : 'shallow_MLP' #options are shallow/deep, _, then MLP or BindingMLP
-  network_width : 8
-  additional_features_dimension : 10
-  additional_zero_dimensions : 10
+  additional_features_dimension : Null #Features that carry some information about class-identity; analogous to binding features
+  additional_zero_dimensions : Null #Features that carry no information about class-identity; analogous to e.g. an input pixel
   learning_rate : 0.1
-  dynamic_dic : 
-    binding_width: -1
-    k_sparsity: 0.25
-  training_epochs : 50
-  Gaussian_noise : 0.0
-  smoothing_coefficient : 0.0
-  step : 0.1
-  data_set : 'hyper_spheres'
-  num_networks : 5
-  data_size : 1000
-  batch_size : 128
+  training_epochs : 20
+  num_networks : 3 #Number of duplicate networks
+  data_size : 2048 #Size of synthetic data-set
+  batch_size : 512
   
-
+#See config_BindingCNNs.yaml for more information 
  adversarial_params :
-  num_attack_examples : 128
+  num_attack_examples : 10
   transfer_attack_setup : False
   estimate_gradients : False
   boundary_attack_iterations : 50
