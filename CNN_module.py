@@ -3,7 +3,7 @@
 import tensorflow as tf
 import numpy as np
 import math
-from keras.datasets import mnist, cifar10
+from keras.datasets import mnist, fashion_mnist, cifar10
 from keras.utils import to_categorical
 from keras.preprocessing.image import ImageDataGenerator
 from skimage.util import random_noise
@@ -18,6 +18,12 @@ def data_setup(params):
     if params['dataset'] == 'mnist':
         print("\nLoading MNIST data-set")
         (training_data, training_labels), (testing_data, testing_labels) = mnist.load_data()
+        training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
+        testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
+
+    elif params['dataset'] == 'fashion_mnist':
+        print("\nLoading Fashion MNIST data-set")
+        (training_data, training_labels), (testing_data, testing_labels) = fashion_mnist.load_data()
         training_data = np.reshape(training_data, [np.shape(training_data)[0], 28, 28, 1])
         testing_data = np.reshape(testing_data, [np.shape(testing_data)[0], 28, 28, 1])
 
@@ -117,19 +123,19 @@ def initializer_fun(params, training_data, training_labels):
 
         x = tf.compat.v1.placeholder(training_data.dtype, [None, 28, 28, 1], name='x-input')
 
-        if params['architecture'] == 'MadryCNN':
+        if params['architecture'] == 'size_equivalent':
             
             with tf.compat.v1.variable_scope(params['architecture']):
                 weights = {
-                'conv_W1' : tf.compat.v1.get_variable('CW1', shape=(5, 5, 1, 16), initializer=initializer),
-                'conv_W2' : tf.compat.v1.get_variable('CW2', shape=(5, 5, 16, 32), initializer=initializer),
-                'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(5*5*32, 512), initializer=initializer),
+                'conv_W1' : tf.compat.v1.get_variable('CW1', shape=(5, 5, 1, 32), initializer=initializer),
+                'conv_W2' : tf.compat.v1.get_variable('CW2', shape=(5, 5, 32, 64), initializer=initializer),
+                'dense_W1' : tf.compat.v1.get_variable('DW1', shape=(5*5*64, 512), initializer=initializer),
                 'output_W' : tf.compat.v1.get_variable('OW', shape=(512, 10), initializer=initializer)
                 }
 
                 biases = {
-                'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(16), initializer=initializer),
-                'conv_b2' : tf.compat.v1.get_variable('Cb2', shape=(32), initializer=initializer),
+                'conv_b1' : tf.compat.v1.get_variable('Cb1', shape=(32), initializer=initializer),
+                'conv_b2' : tf.compat.v1.get_variable('Cb2', shape=(64), initializer=initializer),
                 'dense_b1' : tf.compat.v1.get_variable('Db1', shape=(512), initializer=initializer),
                 'output_b' : tf.compat.v1.get_variable('Ob', shape=(10), initializer=initializer)
                 }
@@ -205,10 +211,10 @@ def LeNet_predictions(features, dropout_rate_placeholder, weights, biases, dynam
 
     return logits, scalar_dic
 
-#Larger model for MNIST with a similar basic architecture to that used in Madry et, 2017
-def MadryCNN_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_dic):
+#Larger model for MNIST with a similar basic architecture to that used in Madry et, 2017, but larger MLP to match the size of the BindingCNN
+def size_equivalent_predictions(features, dropout_rate_placeholder, weights, biases, dynamic_dic):
 
-    print("Building a CNN architecture as used in Madry et al, 2017")
+    print("Building a CNN architecture with as many parameters as the BindingCNN used on MNIST")
 
     scalar_dic = {} #Store the sparsity of layer activations for later analysis
     pool1_drop, pool1_indices, relu1, scalar_dic['relu1_sparsity'], scalar_dic['pool1_sparsity'] = basic_conv_sequence(features, 
@@ -218,10 +224,10 @@ def MadryCNN_predictions(features, dropout_rate_placeholder, weights, biases, dy
         dropout_rate_placeholder, weights['conv_W2'], biases['conv_b2'], 'VALID', scalar_dic)
 
     #Operations distinct from other networks:
-    pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 32])
+    pool2_flat = tf.reshape(pool2_drop, [-1, 5 * 5 * 64])
     dense1 = tf.nn.bias_add(tf.matmul(pool2_flat, weights['dense_W1']), biases['dense_b1'])
 
-    #Note Madry-like architecture only has one fully connected layer
+    #Note this architecture only has one fully connected layer
     dense1_drop = tf.nn.dropout(dense1, rate=dropout_rate_placeholder)
     dense1_drop = tf.nn.relu(dense1_drop)
     logits = tf.nn.bias_add(tf.matmul(dense1_drop, weights['output_W']), biases['output_b'])
@@ -513,8 +519,8 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
         predictions, scalar_dic = LeNet_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
     elif params['architecture'] == 'BindingCNN':
         predictions, scalar_dic = BindingCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
-    elif params['architecture'] == 'MadryCNN':
-        predictions, scalar_dic = MadryCNN_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
+    elif params['architecture'] == 'size_equivalent':
+        predictions, scalar_dic = size_equivalent_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic']) 
     elif params['architecture'] == 'VGG':
         predictions, scalar_dic = VGG_predictions(x_placeholder, dropout_rate_placeholder, weights, biases, params['dynamic_dic'])
     elif params['architecture'] == 'BindingVGG':
@@ -559,7 +565,6 @@ def network_train(params, iter_num, var_list, training_data, training_labels, te
                     batches += 1
 
                     if params['Gaussian_noise'] != None:
-                        print("Adding Gaussian noise to the training data")
                         batch_x = np.clip(batch_x + np.random.normal(0, scale=params['Gaussian_noise'], size=np.shape(batch_x)), 0, 1)
                     
                     if batches >= len(training_labels)/params['batch_size']:
