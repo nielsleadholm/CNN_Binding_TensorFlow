@@ -11,6 +11,7 @@ import pandas as pd
 import time
 import foolbox
 import CNN_module as CNN
+import Adversarial_training
 
 def iterative_evaluation(model_params, adversarial_params, training_data, training_labels, evaluation_data, evaluation_labels):
 
@@ -22,9 +23,18 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 		
 		training_pretime = time.time()
 
+		if (model_params['train_new_network'] == True) and (model_params['adver_trained'] == True):
+
+			print("\nUsing adversarial training...")
+			eval_accuracy, network_name_str = Adversarial_training.adver_training(model_params, iter_num, training_data, 
+				training_labels, evaluation_data, evaluation_labels)
+			
+			iter_dic.update({'testing_accuracy':float(eval_accuracy)})
+		
+		#Note Adversarial_training uses it's own initializer
 		x_placeholder, y_placeholder, dropout_rate_placeholder, var_list, weights, biases = CNN.initializer_fun(model_params, training_data, training_labels)
 
-		if (model_params['train_new_network'] == True):
+		if (model_params['train_new_network'] == True) and (model_params['adver_trained'] == False):
 			print("\nTraining new network...")
 			training_accuracy, eval_accuracy, network_name_str, eval_sparsity = CNN.network_train(model_params, iter_num, var_list, training_data, 
 				training_labels, evaluation_data, evaluation_labels, weights, biases, x_placeholder=x_placeholder, 
@@ -37,7 +47,8 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 			training_total_time = time.time() - training_pretime
 			iter_dic.update({'training_time':training_total_time})
 
-		elif (model_params['train_new_network'] == False):
+		#Evaluate the accuracy of a pre-trained model and optionally run mltest suite
+		elif (model_params['train_new_network'] == False) or (model_params['adver_trained'] == True):
 
 			network_name_str = str(iter_num) + model_params['architecture']
 
