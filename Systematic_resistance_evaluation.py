@@ -23,127 +23,169 @@ def iterative_evaluation(model_params, adversarial_params, training_data, traini
 		
 		training_pretime = time.time()
 
-		if (model_params['train_new_network'] == True) and (model_params['adver_trained'] == True):
+		if (model_params['Madry_adver_trained'] == True):
 
-			print("\nUsing adversarial training...")
-			eval_accuracy, network_name_str = Adversarial_training.adver_training(model_params, iter_num, training_data, 
-				training_labels, evaluation_data, evaluation_labels)
+			print("\nLoading an adversarially trained model from the MadryLab challenge")
+
+			if model_params['dataset'] == 'cifar10':
+				from cifar10_challenge_master.model import Model as cifar10_Model
+				checkpoint_var = '70000'
+				adver_model = cifar10_Model(mode='eval')
+
+			elif model_params['dataset'] == 'mnist':
+				from mnist_challenge_master.model import Model as mnist_Model
+				checkpoint_var = '99900'
+				adver_model = mnist_Model()
 			
-			iter_dic.update({'testing_accuracy':float(eval_accuracy)})
-		
-		#Note Adversarial_training uses it's own initializer
-		x_placeholder, y_placeholder, dropout_rate_placeholder, var_list, weights, biases = CNN.initializer_fun(model_params, training_data, training_labels)
+			checkpoint_name = model_params['dataset'] + '_challenge_master/models/adv_trained/checkpoint-' + checkpoint_var
 
-		if (model_params['train_new_network'] == True) and (model_params['adver_trained'] == False):
-			print("\nTraining new network...")
-			training_accuracy, eval_accuracy, network_name_str, eval_sparsity = CNN.network_train(model_params, iter_num, var_list, training_data, 
-				training_labels, evaluation_data, evaluation_labels, weights, biases, x_placeholder=x_placeholder, 
-			    y_placeholder=y_placeholder, dropout_rate_placeholder=dropout_rate_placeholder)
-
-			testing_sparsity_float = [dict([key, float(value)] for key, value in eval_sparsity.items())] 
-			iter_dic.update({'training_accuracy':float(training_accuracy), 'testing_accuracy':float(eval_accuracy),
-				'testing_sparsity':testing_sparsity_float})
-		
-			training_total_time = time.time() - training_pretime
-			iter_dic.update({'training_time':training_total_time})
-
-		#Evaluate the accuracy of a pre-trained model and optionally run mltest suite
-		elif (model_params['train_new_network'] == False) or (model_params['adver_trained'] == True):
-
-			network_name_str = str(iter_num) + model_params['architecture']
-
-			testing_writer = tf.compat.v1.summary.FileWriter('tensorboard_data/tb_' + network_name_str + '/testing')
-			merged = tf.compat.v1.summary.merge_all()
-
-			#Evaluate the accuracy of the loaded model
-			predictions, scalar_dic = getattr(CNN, model_params['architecture'] + '_predictions')(x_placeholder, dropout_rate_placeholder, weights, biases, model_params['dynamic_dic'])
-			correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
-			total_accuracy = tf.reduce_sum(tf.cast(correct_prediction, tf.float32)) #Used to store batched accuracy for evaluating the test dataset
-
-			#Used for the mltest suite:
-			dummy_cost = tf.reduce_mean(tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(logits=predictions, labels=y_placeholder))
-			dummy_op = tf.compat.v1.train.AdamOptimizer(learning_rate=model_params['learning_rate']).minimize(dummy_cost)
-
-			saver = tf.train.Saver(var_list)
-			with tf.Session() as sess:
-				saver.restore(sess, ("network_weights_data/" + network_name_str + ".ckpt"))
-
-				if model_params['test_suite_bool'] == True:
-					print("\nRunning mltest for NaN/Inf values on a single batch...")
-					mltest.test_suite(
-						predictions,
-						train_op=dummy_op,
-						feed_dict={x_placeholder: testing_data[0:model_params['batch_size']], 
-							y_placeholder: testing_labels[0:model_params['batch_size']], dropout_rate_placeholder : 0.0}, 
-						var_list=var_list,
-						test_all_inputs_dependent=False,
-						test_other_vars_dont_change=False,
-						test_output_range=False,
-						test_nan_vals=True,
-						test_inf_vals=True)
-					print("--> passed mltest check.")
+			#Check clean accuracy
+			saver = tf.train.Saver()
+			with tf.Session() as session:
+				saver.restore(session, checkpoint_name)
+				fmodel = foolbox.models.TensorFlowModel(adver_model.x_input, adver_model.pre_softmax, (0,1))
 
 				#Assess accuracy batch-wise to avoid memory issues in large models
 				accuracy_total = 0 
-				testing_pretime = time.time()
 
-				for test_batch in range(math.ceil(len(testing_labels)/model_params['batch_size'])):
+				for test_batch in range(math.ceil(len(evaluation_labels)/model_params['batch_size'])):
 
-					test_batch_x = testing_data[test_batch*model_params['batch_size']:min((test_batch+1)*model_params['batch_size'], len(testing_labels))]
-					test_batch_y = testing_labels[test_batch*model_params['batch_size']:min((test_batch+1)*model_params['batch_size'], len(testing_labels))]
+					test_batch_x = evaluation_data[test_batch*model_params['batch_size']:min((test_batch+1)*model_params['batch_size'], len(evaluation_labels))]
+					test_batch_y = evaluation_labels[test_batch*model_params['batch_size']:min((test_batch+1)*model_params['batch_size'], len(evaluation_labels))]
 
-					network_summary, batch_testing_acc = sess.run([merged, total_accuracy], feed_dict={x_placeholder: test_batch_x, y_placeholder: test_batch_y, dropout_rate_placeholder : 0.0})
+					batch_testing_acc = np.sum(np.argmax(fmodel.forward(test_batch_x),1) == np.argmax(test_batch_y,1))
 					accuracy_total += batch_testing_acc
 
-				testing_writer.add_summary(network_summary)
+				testing_acc = accuracy_total/len(evaluation_labels)
 
-				testing_acc = accuracy_total/len(testing_labels)
-				#Convert python variable into a Summary object for TensorFlow
-				testing_summary = tf.Summary(value=[tf.Summary.Value(tag="testing_acc", simple_value=testing_acc),])
-				testing_writer.add_summary(testing_summary)
+				print("Adversarially trained model has an accuracy of " + str(testing_acc))
 
-				testing_writer.close()
-				
-				print("Testing Accuracy of loaded model = " + "{:.4f}".format(testing_acc))
-				iter_dic.update({'testing_accuracy':float(testing_acc)})
+			#Carry out attacks
+			update_dic = carry_out_attacks(model_params, adversarial_params, None, evaluation_data, evaluation_labels, 
+				x_placeholder=adver_model.x_input, var_list=[], weights={}, biases={}, network_name_str='Madry_adver_trained', iter_num=iter_num, dynamic_dic=None, 
+				adver_model=adver_model, adver_checkpoint=checkpoint_name)
 
-				testing_total_time = time.time() - testing_pretime
-				print("Elapsed time for evaluating all test examples is " + str(testing_total_time))
+		elif (model_params['Madry_adver_trained'] == False):
 
-				#On small-memory models, check layer-wise sparsity on all testing data
-				if model_params['dataset']!='cifar10':
-					testing_sparsity = sess.run(scalar_dic, feed_dict={x_placeholder: testing_data, y_placeholder: testing_labels, dropout_rate_placeholder : 0.0})
+			if (model_params['train_new_network'] == True) and (model_params['local_adver_trained'] == True):
+				print("\n Locally performing adversarial training on a new model...")
+				eval_accuracy, network_name_str = Adversarial_training.adver_training(model_params, iter_num, training_data, 
+					training_labels, evaluation_data, evaluation_labels)
+				iter_dic.update({'testing_accuracy':float(eval_accuracy)})
 
-					print("\nLayer-wise sparsity:")
-					print(testing_sparsity)
+			#Note Adversarial_training uses it's own initializer
+			x_placeholder, y_placeholder, dropout_rate_placeholder, var_list, weights, biases = CNN.initializer_fun(model_params, training_data, training_labels)
 
-					iter_dic.update(testing_sparsity)
+			if (model_params['train_new_network'] == True) and (model_params['local_adver_trained'] == False):
+				print("\nTraining new network...")
+				training_accuracy, eval_accuracy, network_name_str, eval_sparsity = CNN.network_train(model_params, iter_num, var_list, training_data, 
+					training_labels, evaluation_data, evaluation_labels, weights, biases, x_placeholder=x_placeholder, 
+				    y_placeholder=y_placeholder, dropout_rate_placeholder=dropout_rate_placeholder)
+
+				testing_sparsity_float = [dict([key, float(value)] for key, value in eval_sparsity.items())] 
+				iter_dic.update({'training_accuracy':float(training_accuracy), 'testing_accuracy':float(eval_accuracy),
+					'testing_sparsity':testing_sparsity_float})
+			
+				training_total_time = time.time() - training_pretime
+				iter_dic.update({'training_time':training_total_time})
+
+			#Evaluate the accuracy of a pre-trained model and optionally run mltest suite
+			elif (model_params['train_new_network'] == False):
+
+				network_name_str = str(iter_num) + model_params['architecture']
+
+				testing_writer = tf.compat.v1.summary.FileWriter('tensorboard_data/tb_' + network_name_str + '/testing')
+				merged = tf.compat.v1.summary.merge_all()
+
+				#Evaluate the accuracy of the loaded model
+				predictions, scalar_dic = getattr(CNN, model_params['architecture'] + '_predictions')(x_placeholder, dropout_rate_placeholder, weights, biases, model_params['dynamic_dic'])
+				correct_prediction = tf.equal(tf.argmax(predictions, 1), tf.argmax(y_placeholder, 1))
+				total_accuracy = tf.reduce_sum(tf.cast(correct_prediction, tf.float32)) #Used to store batched accuracy for evaluating the test dataset
+
+				#Used for the mltest suite:
+				dummy_cost = tf.reduce_mean(tf.compat.v1.nn.softmax_cross_entropy_with_logits_v2(logits=predictions, labels=y_placeholder))
+				dummy_op = tf.compat.v1.train.AdamOptimizer(learning_rate=model_params['learning_rate']).minimize(dummy_cost)
+
+				saver = tf.train.Saver(var_list)
+				with tf.Session() as sess:
+					saver.restore(sess, ("network_weights_data/" + network_name_str + ".ckpt"))
+
+					if model_params['test_suite_bool'] == True:
+						print("\nRunning mltest for NaN/Inf values on a single batch...")
+						mltest.test_suite(
+							predictions,
+							train_op=dummy_op,
+							feed_dict={x_placeholder: testing_data[0:model_params['batch_size']], 
+								y_placeholder: testing_labels[0:model_params['batch_size']], dropout_rate_placeholder : 0.0}, 
+							var_list=var_list,
+							test_all_inputs_dependent=False,
+							test_other_vars_dont_change=False,
+							test_output_range=False,
+							test_nan_vals=True,
+							test_inf_vals=True)
+						print("--> passed mltest check.")
+
+					#Assess accuracy batch-wise to avoid memory issues in large models
+					accuracy_total = 0 
+					testing_pretime = time.time()
+
+					for test_batch in range(math.ceil(len(testing_labels)/model_params['batch_size'])):
+
+						test_batch_x = testing_data[test_batch*model_params['batch_size']:min((test_batch+1)*model_params['batch_size'], len(testing_labels))]
+						test_batch_y = testing_labels[test_batch*model_params['batch_size']:min((test_batch+1)*model_params['batch_size'], len(testing_labels))]
+
+						network_summary, batch_testing_acc = sess.run([merged, total_accuracy], feed_dict={x_placeholder: test_batch_x, y_placeholder: test_batch_y, dropout_rate_placeholder : 0.0})
+						accuracy_total += batch_testing_acc
+
+					testing_writer.add_summary(network_summary)
+
+					testing_acc = accuracy_total/len(testing_labels)
+					#Convert python variable into a Summary object for TensorFlow
+					testing_summary = tf.Summary(value=[tf.Summary.Value(tag="testing_acc", simple_value=testing_acc),])
+					testing_writer.add_summary(testing_summary)
+
+					testing_writer.close()
+					
+					print("Testing Accuracy of loaded model = " + "{:.4f}".format(testing_acc))
+					iter_dic.update({'testing_accuracy':float(testing_acc)})
+
+					testing_total_time = time.time() - testing_pretime
+					print("Elapsed time for evaluating all test examples is " + str(testing_total_time))
+
+					#On small-memory models, check layer-wise sparsity on all testing data
+					if model_params['dataset']!='cifar10':
+						testing_sparsity = sess.run(scalar_dic, feed_dict={x_placeholder: testing_data, y_placeholder: testing_labels, dropout_rate_placeholder : 0.0})
+
+						print("\nLayer-wise sparsity:")
+						print(testing_sparsity)
+
+						iter_dic.update(testing_sparsity)
 
 
-		# Optional check for stochasticity in a model's predictions
-		if model_params['check_stochasticity'] == True:
-			stochast_dic = {'model_prediction_function':getattr(CNN, model_params['architecture'] + '_predictions'),
-		        'model_weights':"network_weights_data/" + network_name_str + ".ckpt",
-		        'var_list':var_list,
-		        'weights_dic':weights,
-		        'biases_dic':biases,
-		        'input_data':evaluation_data,
-		        'input_labels':evaluation_labels,
-		        'input_placeholder':x_placeholder,
-		        'dropout_rate_placeholder':0.0,
-		        'output_directory':'stochastic_dir',
-		        'num_attack_examples':adversarial_params['num_attack_examples'],
-		        'dynamic_dic':model_params['dynamic_dic'],
-		        'batch_size':128,
-		        'save_images':False,
-		        'estimate_gradients':False}
+			# Optional check for stochasticity in a model's predictions
+			if model_params['check_stochasticity'] == True:
+				stochast_dic = {'model_prediction_function':getattr(CNN, model_params['architecture'] + '_predictions'),
+			        'model_weights':"network_weights_data/" + network_name_str + ".ckpt",
+			        'var_list':var_list,
+			        'weights_dic':weights,
+			        'biases_dic':biases,
+			        'input_data':evaluation_data,
+			        'input_labels':evaluation_labels,
+			        'input_placeholder':x_placeholder,
+			        'dropout_rate_placeholder':0.0,
+			        'output_directory':'stochastic_dir',
+			        'num_attack_examples':adversarial_params['num_attack_examples'],
+			        'dynamic_dic':model_params['dynamic_dic'],
+			        'batch_size':128,
+			        'save_images':False,
+			        'estimate_gradients':False}
 
-			stoch_check = atk.check_stochasticity(stochast_dic)
-			stoch_check.perform_check()
+				stoch_check = atk.check_stochasticity(stochast_dic)
+				stoch_check.perform_check()
 
-		update_dic = carry_out_attacks(model_params, adversarial_params, getattr(CNN, model_params['architecture'] + '_predictions'), evaluation_data, evaluation_labels, 
-			x_placeholder, var_list, weights, biases, network_name_str, iter_num, model_params['dynamic_dic'])
-		
+			update_dic = carry_out_attacks(model_params, adversarial_params, getattr(CNN, model_params['architecture'] + '_predictions'), evaluation_data, evaluation_labels, 
+				x_placeholder, var_list, weights, biases, network_name_str, iter_num, model_params['dynamic_dic'])
+			
 		iter_dic.update(update_dic)
 
 		print("\n\nThe cumulative results are...\n")
@@ -225,7 +267,8 @@ def transfer_attack_setup(model_params, adversarial_params, evaluation_data, eva
 	np.save('transfer_images/BIM_LInf', BIM_LInf_adversaries_array, allow_pickle=True)
 
 
-def carry_out_attacks(model_params, adversarial_params, pred_function, input_data, input_labels, x_placeholder, var_list, weights, biases, network_name_str, iter_num, dynamic_dic):
+def carry_out_attacks(model_params, adversarial_params, pred_function, input_data, input_labels, x_placeholder, 
+	var_list, weights, biases, network_name_str, iter_num, dynamic_dic, adver_model=None, adver_checkpoint=None):
 
 	if os.path.exists('adversarial_images/') == 0:
 		os.mkdir('adversarial_images/')
@@ -244,7 +287,9 @@ def carry_out_attacks(model_params, adversarial_params, pred_function, input_dat
                 'dynamic_dic':dynamic_dic,
                 'batch_size':model_params['batch_size'],
                 'save_images':adversarial_params['save_images'],
-                'estimate_gradients':False}
+                'estimate_gradients':False,
+                'adver_model':adver_model,
+                'adver_checkpoint':adver_checkpoint}
 
 	network_dic_distances = {} #Hold the attack specific distances results for a given network
 	network_dic_adver_accuracies = {} #As above but for accuracies on adversarial examples

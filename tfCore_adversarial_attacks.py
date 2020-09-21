@@ -30,6 +30,8 @@ class parent_attack:
             self.batch_size = attack_dic['batch_size']
             self.save_images = attack_dic['save_images']
             self.estimate_gradients = attack_dic['estimate_gradients']
+            self.adver_model = attack_dic['adver_model']
+            self.adver_checkpoint = attack_dic['adver_checkpoint']
             self.criterion = criterion #note by default this is simply foolbox's Misclassification criterion
 
     #Define the class attribute, attack_method, to be the Blended Uniform Noise attack by default
@@ -39,16 +41,27 @@ class parent_attack:
 
     def evaluate_resistance(self):
 
-        logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
-        saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
+        if self.adver_model == None:
+            logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
+            saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
+   
+        else:
+            saver = tf.train.Saver()
+
         self.mk_dir()
 
         with tf.Session() as session:
-            saver.restore(session, self.model_weights) #Note when restoring weights its important not to run init on the same
-            #variables, as this will over-write the learned weights with randomly initialized ones
+            #Define the foolbox model 
+            if self.adver_model == None: 
+                print("\nEvaluating a non-adversarially trained model")
+                saver.restore(session, self.model_weights) #Note when restoring weights its important not to run init on the same
+                    #variables, as this will over-write the learned weights with randomly initialized ones
+                fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
 
-            #Define the foolbox model
-            fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
+            else:
+                print("\nEvaluating an adversarially trained model")
+                saver.restore(session, self.adver_checkpoint)
+                fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, self.adver_model.pre_softmax, (0,1))
 
             #Wrap the model to enable estimated gradients if desired
             if self.estimate_gradients == True:
@@ -195,15 +208,27 @@ class transfer_attack_L2(parent_attack):
     #Overwrite evaluate_resistance method with one that finds minimal transfer-attack images
     def evaluate_resistance(self):
 
-        logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
-        saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
+        if self.adver_model == None:
+            logits, _ = self.model_prediction_function(self.input_placeholder, self.dropout_rate_placeholder, self.weights_dic, self.biases_dic, self.dynamic_dic)
+            saver = tf.train.Saver(self.var_list) #Define saver object for use later when loading the model weights
+   
+        else:
+            saver = tf.train.Saver()
+
         self.mk_dir()
 
         with tf.Session() as session:
-            saver.restore(session, self.model_weights)
+            #Define the foolbox model 
+            if self.adver_model == None: 
+                print("\nEvaluating a non-adversarially trained model")
+                saver.restore(session, self.model_weights) #Note when restoring weights its important not to run init on the same
+                    #variables, as this will over-write the learned weights with randomly initialized ones
+                fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
 
-            #Define the foolbox model
-            fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, logits, (0,1)) 
+            else:
+                print("\nEvaluating an adversarially trained model")
+                saver.restore(session, self.adver_checkpoint)
+                fmodel = foolbox.models.TensorFlowModel(self.input_placeholder, self.adver_model.pre_softmax, (0,1))
 
             print("\nPerforming a Transfer attack")
             print("Evaluating " + str(self.num_attack_examples) + " adversarial example(s)")
